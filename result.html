@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<title>591 vs i智慧 比對結果</title>
+<style>
+  * { box-sizing: border-box; font-family: "Microsoft JhengHei", "PingFang TC", sans-serif; }
+  body { margin: 0; padding: 24px; background: #f5f5f7; color: #222; }
+  h1 { color: #ff7a00; margin: 0 0 6px; font-size: 24px; }
+  .sub { color: #666; margin-bottom: 20px; font-size: 14px; }
+
+  .progress-card { background: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,.06); text-align: center; max-width: 600px; margin: 40px auto; }
+  .progress-card h2 { color: #ff7a00; margin: 0 0 16px; }
+  .progress-card .msg { font-size: 16px; color: #444; margin-bottom: 20px; min-height: 24px; }
+  .spinner { border: 4px solid #f3f3f3; border-top: 4px solid #ff7a00; border-radius: 50%; width: 50px; height: 50px; animation: spin 1s linear infinite; margin: 0 auto 16px; }
+  @keyframes spin { 100% { transform: rotate(360deg); } }
+  .error { background: #ffebee; color: #c62828; padding: 16px; border-radius: 6px; margin-top: 16px; }
+  .error h3 { margin: 0 0 8px; }
+  .retry { background: #ff7a00; color: white; border: 0; padding: 10px 24px; font-size: 14px; font-weight: bold; border-radius: 6px; cursor: pointer; margin-top: 12px; }
+
+  .summary { background: white; padding: 20px; border-radius: 10px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+  .stats { display: flex; gap: 16px; margin-top: 14px; }
+  .stat { flex: 1; text-align: center; padding: 18px; border-radius: 8px; }
+  .stat .num { font-size: 38px; font-weight: bold; line-height: 1; }
+  .stat .lbl { font-size: 13px; margin-top: 6px; }
+  .stat.ok { background: #e8f5e9; color: #2e7d32; }
+  .stat.warn { background: #fff3e0; color: #ef6c00; }
+  .stat.bad { background: #ffebee; color: #c62828; }
+  .stat.info { background: #e3f2fd; color: #1565c0; }
+
+  table { width: 100%; border-collapse: collapse; background: white; border-radius: 10px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+  th { background: #ff7a00; color: white; padding: 12px 10px; text-align: left; font-size: 13px; }
+  td { padding: 12px 10px; border-bottom: 1px solid #eee; font-size: 13px; vertical-align: top; }
+  tr:hover { background: #fafafa; }
+  .badge { display: inline-block; padding: 3px 10px; border-radius: 12px; font-size: 11px; font-weight: bold; white-space: nowrap; }
+  .badge.ok { background: #c8e6c9; color: #2e7d32; }
+  .badge.warn { background: #ffe0b2; color: #ef6c00; }
+  .badge.bad { background: #ffcdd2; color: #c62828; }
+  .badge.info { background: #bbdefb; color: #1565c0; }
+
+  .actions { margin: 16px 0; }
+  .actions button { background: white; border: 1px solid #ddd; padding: 8px 16px; border-radius: 6px; cursor: pointer; margin-right: 8px; font-size: 13px; }
+  .actions button.primary { background: #ff7a00; color: white; border-color: #ff7a00; }
+  .actions button:hover { opacity: 0.85; }
+
+  /* === 免責聲明 === */
+  .disclaimer-screen { max-width: 760px; margin: 20px auto; background: white; border-radius: 12px; box-shadow: 0 4px 16px rgba(0,0,0,.1); overflow: hidden; }
+  .disclaimer-header { background: linear-gradient(135deg, #ff7a00, #ff9a3c); color: white; padding: 24px 28px; }
+  .disclaimer-header h2 { margin: 0; font-size: 22px; }
+  .disclaimer-header .subtitle { margin-top: 4px; font-size: 13px; opacity: 0.95; }
+  .disclaimer-body { padding: 0; }
+  .disclaimer-scroll { padding: 24px 28px; max-height: 50vh; overflow-y: auto; line-height: 1.7; font-size: 14px; color: #333; border-bottom: 1px solid #eee; }
+  .disclaimer-scroll h3 { color: #ff7a00; margin: 18px 0 8px; font-size: 15px; }
+  .disclaimer-scroll h3:first-child { margin-top: 0; }
+  .disclaimer-scroll p, .disclaimer-scroll ul { margin: 6px 0; }
+  .disclaimer-scroll ul { padding-left: 22px; }
+  .disclaimer-scroll li { margin: 4px 0; }
+  .disclaimer-scroll b, .disclaimer-scroll strong { color: #c62828; }
+  .disclaimer-footer { padding: 18px 28px; background: #fafafa; }
+  .scroll-hint { color: #ef6c00; font-size: 12px; margin-bottom: 12px; display: flex; align-items: center; gap: 6px; }
+  .scroll-hint.done { color: #2e7d32; }
+  .agree-box { display: flex; align-items: flex-start; gap: 10px; padding: 12px; background: white; border: 2px solid #ddd; border-radius: 6px; cursor: pointer; transition: all .2s; }
+  .agree-box:hover { border-color: #ff7a00; }
+  .agree-box input { margin-top: 3px; transform: scale(1.2); cursor: pointer; }
+  .agree-box label { flex: 1; cursor: pointer; font-size: 14px; }
+  .disclaimer-buttons { margin-top: 14px; display: flex; gap: 10px; justify-content: flex-end; }
+  .disclaimer-buttons button { padding: 10px 22px; font-size: 14px; font-weight: bold; border-radius: 6px; cursor: pointer; border: 0; }
+  .btn-disagree { background: #f5f5f5; color: #666; border: 1px solid #ddd; }
+  .btn-agree { background: #ff7a00; color: white; }
+  .btn-agree:disabled { background: #ccc; cursor: not-allowed; opacity: 0.7; }
+  .btn-agree:not(:disabled):hover { background: #e56d00; }
+
+  /* === 結果頁的小提醒列 === */
+  .reminder-bar { background: #fff8e1; border-left: 4px solid #ff9800; padding: 10px 16px; margin-bottom: 14px; border-radius: 4px; font-size: 13px; color: #6d4c00; display: flex; align-items: center; gap: 8px; }
+  .reminder-bar a { color: #ef6c00; cursor: pointer; text-decoration: underline; margin-left: auto; font-weight: bold; }
+
+  /* === 重看須知的 modal === */
+  .modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,.5); display: none; align-items: flex-start; justify-content: center; z-index: 9999; padding: 40px 20px; overflow-y: auto; }
+  .modal-bg.show { display: flex; }
+  .modal-content { background: white; border-radius: 12px; max-width: 760px; width: 100%; box-shadow: 0 8px 32px rgba(0,0,0,.2); overflow: hidden; }
+  .modal-close { background: white; color: #666; border: 1px solid #ddd; padding: 8px 22px; font-size: 14px; border-radius: 6px; cursor: pointer; }
+</style>
+</head>
+<body>
+
+<h1>591 廣告 vs i智慧 自動比對</h1>
+<div class="sub">本工具會自動抓取兩邊資料並比對社區+總價</div>
+
+<!-- 首次使用：使用須知同意畫面 -->
+<div id="disclaimer" class="disclaimer-screen" style="display:none;">
+  <div class="disclaimer-header">
+    <h2>📜 使用須知</h2>
+    <div class="subtitle">首次使用前請閱讀以下內容（之後不會再跳出）</div>
+  </div>
+  <div class="disclaimer-body">
+    <div class="disclaimer-scroll" id="disclaimerScroll">
+      <h3>1. 工具性質</h3>
+      <p>這是個人開發的房仲業務輔助小工具，用於比對 591 廣告與 i智慧 關注物件，幫助快速找出可能漏改價或漏下架的物件。<b>屬個人非正式工具</b>，並非任何公司的官方產品。</p>
+
+      <h3>2. 與第三方關係聲明</h3>
+      <p>本工具與 <b>591 房屋交易網</b>、<b>永慶不動產</b>、<b>i智慧系統</b> 等任何公司或服務<b>無任何隸屬、合作、授權或代理關係</b>，所有商標權利歸各該公司所有。</p>
+
+      <h3>3. 資料處理原則</h3>
+      <p>本工具完全在你<b>自己的瀏覽器</b>內運作，使用你<b>自己的登入身分</b>讀取你<b>有權存取的資料</b>。<b>不上傳、不傳輸、不留存任何資料</b>至外部。</p>
+
+      <h3>4. 你的責任</h3>
+      <ul>
+        <li>使用前請用<b>你自己的帳號</b>登入 591 和 i智慧</li>
+        <li>比對結果<b>僅供參考</b>，請務必<b>自行人工複核</b>最終結果</li>
+        <li>你 591 廣告的內容是否合規、是否與 i智慧 一致，<b>最終責任在你自己</b></li>
+        <li>因廣告未及時調整所生之罰金、行政處分、客訴、業績損失等，<b>由你自己承擔，與本工具開發者無關</b></li>
+      </ul>
+
+      <h3>5. 工具可能失靈或誤判</h3>
+      <ul>
+        <li>591 或 i智慧 改版 → 工具可能暫時或永久無法使用</li>
+        <li>工具偶爾會誤判（同價、同坪數、同樓層等罕見邊界狀況）→ <b>不可百分百依賴</b></li>
+        <li>如果工具跳出<b>紅色嚴重警告</b>，請立即停止使用，回頭人工核對全部物件</li>
+      </ul>
+
+      <h3>6. 散布限制</h3>
+      <p>請勿將本工具：</p>
+      <ul>
+        <li>散布、分享、轉發給<b>非永慶不動產相關人員</b></li>
+        <li>公開發布到<b>網路平台</b>（論壇、社團、社群媒體、雲端硬碟等）</li>
+        <li>進行<b>逆向工程</b>、修改後再散布、或上架到任何應用商店</li>
+      </ul>
+
+      <h3>7. 維護無保證</h3>
+      <p>開發者<b>不保證</b>本工具持續可用、不保證任何時效性的修復義務。第三方網站變動、個人因素、公司政策等任何原因，開發者<b>保留隨時停止維護或更新的權利</b>，毋庸事前通知。</p>
+
+      <h3>8. AS-IS 條款</h3>
+      <p>本工具係依「<b>現狀</b>」提供，<b>不提供任何形式之明示或默示擔保</b>，包括但不限於適售性、特定目的適用性、正確性、完整性、即時性、不侵權等。</p>
+
+      <h3>9. 責任限制</h3>
+      <p>因使用、無法使用或誤用本工具所生之任何<b>直接、間接、附隨、特別或衍生損害</b>（包含但不限於罰金、罰款、商業損失、業績損失、客戶糾紛、行政處分、訴訟費用等），<b>概由使用者自行承擔，開發者不負任何賠償或補償責任</b>。</p>
+
+      <h3>10. 同意條款</h3>
+      <p>勾選下方「我已詳閱並同意」並點擊「同意，開始使用」即代表你已詳閱本須知並同意全部內容。<b>如不同意，請立即關閉本視窗並停止使用本工具</b>。</p>
+
+      <p style="color:#999;font-size:12px;margin-top:18px;">最後更新：2026 年 05 月 19 日</p>
+    </div>
+    <div class="disclaimer-footer">
+      <div class="scroll-hint" id="scrollHint">⬇ 請捲動到最底以啟用「同意」按鈕</div>
+      <div class="agree-box">
+        <input type="checkbox" id="agreeCheck" disabled>
+        <label for="agreeCheck">我已詳閱並同意上述全部條款，了解工具僅供輔助、結果須自行人工複核，相關責任由我自負。</label>
+      </div>
+      <div class="disclaimer-buttons">
+        <button class="btn-disagree" id="disagreeBtn">不同意，關閉</button>
+        <button class="btn-agree" id="agreeBtn" disabled>同意，開始使用</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 比對進度 -->
+<div id="progress" class="progress-card" style="display:none;">
+  <div class="spinner"></div>
+  <h2>正在比對中…</h2>
+  <div class="msg" id="statusMsg">準備開始…</div>
+</div>
+
+<!-- 比對結果 -->
+<div id="output" style="display:none;"></div>
+
+<!-- 重看須知的浮層 -->
+<div id="disclaimerModal" class="modal-bg">
+  <div class="modal-content">
+    <div class="disclaimer-header">
+      <h2>📜 使用須知</h2>
+      <div class="subtitle">隨時可重新閱讀</div>
+    </div>
+    <div class="disclaimer-scroll" id="disclaimerScrollReadonly" style="max-height:60vh;"></div>
+    <div class="disclaimer-footer" style="text-align:right;">
+      <button class="modal-close" id="modalCloseBtn">關閉</button>
+    </div>
+  </div>
+</div>
+
+<script src="result.js"></script>
+</body>
+</html>
