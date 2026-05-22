@@ -11,10 +11,11 @@
 
 const DISCLAIMER_VERSION = 1;
 const DISCLAIMER_STORAGE_KEY = 'disclaimerAccepted_v' + DISCLAIMER_VERSION;
-const LICENSE_API = 'https://ycut-license-api.sir8713642.workers.dev/verify-license';
+const LICENSE_STATUS_API = 'https://ycut-license-api.sir8713642.workers.dev/api/license-status';
 const PRODUCT_ID = 'listing_compare';
 const TRIAL_DAYS = 3;
 const TRIAL_STORAGE_KEY = 'trial_started_at_' + PRODUCT_ID;
+const LICENSE_CACHE_TTL_MS = 30 * 60 * 1000;
 
 function $(id) { return document.getElementById(id); }
 function setStatus(msg) { const el = $('statusMsg'); if (el) el.textContent = msg; }
@@ -60,14 +61,6 @@ function waitForTabComplete(tabId, timeoutMs) {
 
 // ============ 授權 / 試用 ============
 
-function normalizeLicenseKey(value) {
-  return (value || '').trim().toUpperCase();
-}
-
-function isValidLicenseKey(value) {
-  return /^[A-Z2-9]{5}(-[A-Z2-9]{5}){4}$/.test(value || '');
-}
-
 async function getOrCreateInstallId() {
   const stored = await chrome.storage.local.get(['install_id']);
   if (stored.install_id) return stored.install_id;
@@ -98,37 +91,57 @@ async function getTrialInfo() {
   };
 }
 
-async function verifyLicenseKey(licenseKey) {
+async function hasFreshLicenseCache(installId) {
+  const stored = await chrome.storage.local.get([
+    'license_status',
+    'qr_licensed_install_id',
+    'last_verified_at'
+  ]);
+
+  if (stored.license_status !== 'valid' || stored.qr_licensed_install_id !== installId) {
+    return false;
+  }
+
+  const verifiedAt = new Date(stored.last_verified_at || 0).getTime();
+  return Number.isFinite(verifiedAt) && Date.now() - verifiedAt < LICENSE_CACHE_TTL_MS;
+}
+
+async function checkQrLicenseStatus() {
   const installId = await getOrCreateInstallId();
-  const url = LICENSE_API +
+  const url = LICENSE_STATUS_API +
     '?product_id=' + encodeURIComponent(PRODUCT_ID) +
-    '&license_key=' + encodeURIComponent(licenseKey) +
     '&install_id=' + encodeURIComponent(installId);
+
   const res = await fetch(url);
-  return await res.json();
+  const data = await res.json();
+
+  if (data && data.success && data.active) {
+    await chrome.storage.local.set({
+      license_status: 'valid',
+      qr_licensed_install_id: installId,
+      last_verified_at: new Date().toISOString()
+    });
+    return true;
+  }
+
+  await chrome.storage.local.set({ license_status: 'invalid' });
+  return false;
 }
 
 async function checkLicenseAccess() {
-  const stored = await chrome.storage.local.get(['license_key', 'license_status']);
-  const licenseKey = normalizeLicenseKey(stored.license_key);
+  const installId = await getOrCreateInstallId();
 
-  if (isValidLicenseKey(licenseKey)) {
-    try {
-      const result = await verifyLicenseKey(licenseKey);
-      if (result && result.success) {
-        await chrome.storage.local.set({
-          license_key: licenseKey,
-          license_status: 'valid',
-          last_verified_at: new Date().toISOString()
-        });
-        return { allowed: true, mode: 'license', message: '授權有效。' };
-      }
+  if (await hasFreshLicenseCache(installId)) {
+    return { allowed: true, mode: 'license', message: '授權快取有效。' };
+  }
 
-      await chrome.storage.local.set({ license_status: 'invalid' });
-    } catch (e) {
-      if (stored.license_status === 'valid') {
-        return { allowed: true, mode: 'license', message: '授權暫以本機狀態通過，稍後會再驗證。' };
-      }
+  try {
+    if (await checkQrLicenseStatus()) {
+      return { allowed: true, mode: 'license', message: '授權有效。' };
+    }
+  } catch (e) {
+    if (await hasFreshLicenseCache(installId)) {
+      return { allowed: true, mode: 'license', message: '授權暫以本機狀態通過，稍後會再驗證。' };
     }
   }
 
@@ -144,77 +157,16 @@ async function checkLicenseAccess() {
   return {
     allowed: false,
     mode: 'expired',
-    message: '請輸入授權序號後繼續使用。'
+    message: '請回到擴充工具視窗，產生 QR Code 並請管理員核准。'
   };
 }
 
-function setLicenseStatus(message, type) {
-  const el = $('licenseStatus');
-  if (!el) return;
-  el.textContent = message;
-  el.className = 'license-status' + (type ? ' ' + type : '');
-}
-
 async function refreshLicenseUi() {
-  const input = $('licenseKey');
-  const panel = $('licensePanel');
-  const stored = await chrome.storage.local.get(['license_key']);
-  if (input && stored.license_key) input.value = stored.license_key;
-
-  const access = await checkLicenseAccess();
-
-  if (!panel) return access;
-
-  if (panel) {
-    panel.style.display = access.allowed ? 'none' : '';
-  }
-
-  if (!access.allowed) {
-    setLicenseStatus(access.message, 'bad');
-  } else if (access.mode === 'license') {
-    setLicenseStatus(access.message, 'ok');
-  } else {
-    setLicenseStatus('', '');
-  }
-
-  return access;
+  return await checkLicenseAccess();
 }
 
 async function saveAndVerifyLicenseFromInput() {
-  const btn = $('verifyLicenseBtn');
-  const input = $('licenseKey');
-  const licenseKey = normalizeLicenseKey(input && input.value);
-
-  if (!isValidLicenseKey(licenseKey)) {
-    setLicenseStatus('序號格式錯誤，格式應為 XXXXX-XXXXX-XXXXX-XXXXX-XXXXX。', 'bad');
-    return false;
-  }
-
-  if (btn) btn.disabled = true;
-  setLicenseStatus('正在驗證授權...', '');
-
-  try {
-    const result = await verifyLicenseKey(licenseKey);
-    if (!result || !result.success) {
-      await chrome.storage.local.set({ license_status: 'invalid' });
-      setLicenseStatus(result?.message || '授權失敗。', 'bad');
-      return false;
-    }
-
-    await chrome.storage.local.set({
-      license_key: licenseKey,
-      license_status: 'valid',
-      last_verified_at: new Date().toISOString()
-    });
-    if (input) input.value = licenseKey;
-    setLicenseStatus(result.first_bind ? '授權成功，已綁定此瀏覽器。' : '授權有效。', 'ok');
-    return true;
-  } catch (e) {
-    setLicenseStatus('無法連線授權伺服器，請稍後再試。', 'bad');
-    return false;
-  } finally {
-    if (btn) btn.disabled = false;
-  }
+  return false;
 }
 
 // ============ i智慧 抓取（API + DOM 備用）============
@@ -768,7 +720,7 @@ async function startIfAccessAllowed() {
     $('progress').style.display = '';
     $('progress').innerHTML =
       '<h2 style="color:#c62828;margin:0 0 12px;">需要授權</h2>' +
-      '<div class="error">請從擴充工具按鈕開啟，輸入授權序號後繼續使用。</div>';
+      '<div class="error">請從擴充工具按鈕開啟，產生 QR Code 並請管理員核准後繼續使用。</div>';
     return;
   }
 

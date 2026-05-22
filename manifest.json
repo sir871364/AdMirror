@@ -1,14 +1,18 @@
 {
   "manifest_version": 3,
   "name": "591 廣告 vs i智慧 自動比對工具",
-  "version": "1.2.2",
+  "version": "1.3.1",
   "description": "一鍵自動抓取 591 上架廣告與 i智慧關注物件，比對社區/價格/坪數/樓層，列出需下架或修改價格的廣告。內含使用須知。",
   "permissions": ["tabs", "scripting", "storage"],
   "host_permissions": [
     "https://is.ycut.com.tw/*",
     "https://user.591.com.tw/*",
-    "https://ycut-license-api.sir8713642.workers.dev/*"
+    "https://ycut-license-api.sir8713642.workers.dev/*",
+    "https://api.qrserver.com/*"
   ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'; img-src 'self' data: https://api.qrserver.com; connect-src 'self' https://ycut-license-api.sir8713642.workers.dev https://api.qrserver.com;"
+  },
   "action": {
     "default_popup": "popup.html",
     "default_title": "591 vs i智慧 比對",

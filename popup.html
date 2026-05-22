@@ -10,9 +10,11 @@
   button { width: 100%; background: #ff7a00; color: white; border: 0; padding: 12px; font-size: 14px; font-weight: bold; border-radius: 6px; cursor: pointer; }
   button:hover { background: #e56d00; }
   button:disabled { background: #ccc; cursor: not-allowed; }
-  .license-panel { display: none; margin-top: 12px; padding-top: 12px; border-top: 1px solid #eee; }
-  .license-panel label { display: block; font-size: 12px; font-weight: bold; color: #444; margin-bottom: 6px; }
-  .license-panel input { width: 100%; padding: 9px 10px; border: 1px solid #ddd; border-radius: 6px; font-size: 12px; text-transform: uppercase; margin-bottom: 8px; }
+  .license-panel { display: none; margin-top: 12px; padding-top: 12px; border-top: 1px solid #eee; text-align:center; }
+  .qr-box { width: 210px; height: 210px; margin: 10px auto; background:#fff; border:1px solid #eee; border-radius:8px; display:flex; align-items:center; justify-content:center; overflow:hidden; }
+  .qr-box img { width: 200px; height: 200px; display:block; }
+  .timer { font-size: 20px; color:#ff7a00; font-weight:bold; margin-top:6px; }
+  .install-id { font-size:10px; color:#999; word-break:break-all; margin-top:6px; }
   .license-status { font-size: 12px; line-height: 1.45; margin-top: 8px; color: #666; }
   .license-status.ok { color: #12805c; }
   .license-status.bad { color: #c62828; }
@@ -24,10 +26,12 @@
   <p>按下按鈕後會自動抓取兩邊資料、比對社區與總價，幾秒鐘後在新分頁顯示結果。</p>
   <button id="startBtn">🔍 開始自動比對</button>
   <div class="license-panel" id="licensePanel">
-    <label for="licenseKey">授權序號</label>
-    <input id="licenseKey" placeholder="XXXXX-XXXXX-XXXXX-XXXXX-XXXXX" autocomplete="off">
-    <button id="verifyLicenseBtn" type="button">驗證授權</button>
-    <div id="licenseStatus" class="license-status">請輸入授權序號後驗證。</div>
+    <div style="font-size:13px;font-weight:bold;color:#444;margin-bottom:4px;">請管理員掃描 QR Code 核准</div>
+    <div class="qr-box"><img id="licenseQr" alt="授權 QR Code"></div>
+    <div class="timer" id="qrTimer">05:00</div>
+    <button id="refreshQrBtn" type="button">重新產生 QR Code</button>
+    <div id="licenseStatus" class="license-status">正在產生授權 QR Code...</div>
+    <div id="installIdText" class="install-id"></div>
   </div>
   <div class="small">需先登入 i智慧 與 591 會員中心</div>
   <script src="popup.js"></script>

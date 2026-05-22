@@ -1,17 +1,19 @@
-const LICENSE_API = 'https://ycut-license-api.sir8713642.workers.dev/verify-license';
+const LICENSE_REQUEST_API = 'https://ycut-license-api.sir8713642.workers.dev/api/request-license';
+const LICENSE_STATUS_API = 'https://ycut-license-api.sir8713642.workers.dev/api/license-status';
 const PRODUCT_ID = 'listing_compare';
 const TRIAL_DAYS = 3;
 const TRIAL_STORAGE_KEY = 'trial_started_at_' + PRODUCT_ID;
 
+const QR_LIFETIME_MS = 5 * 60 * 1000;
+const POLL_INTERVAL_MS = 5000;
+const LICENSE_CACHE_TTL_MS = 30 * 60 * 1000;
+
 const $ = (id) => document.getElementById(id);
 
-function normalizeLicenseKey(value) {
-  return (value || '').trim().toUpperCase();
-}
-
-function isValidLicenseKey(value) {
-  return /^[A-Z2-9]{5}(-[A-Z2-9]{5}){4}$/.test(value || '');
-}
+let qrExpireAt = 0;
+let qrTimerId = null;
+let pollTimerId = null;
+let currentRequestId = '';
 
 function setLicenseStatus(message, ok = false) {
   const el = $('licenseStatus');
@@ -46,40 +48,57 @@ async function getTrialInfo() {
   }
 
   const expiresAt = startedAt + TRIAL_DAYS * 24 * 60 * 60 * 1000;
-  return {
-    active: expiresAt > now
-  };
+  return { active: expiresAt > now };
 }
 
-async function verifyLicenseKey(licenseKey) {
+async function hasFreshLicenseCache(installId) {
+  const stored = await chrome.storage.local.get([
+    'license_status',
+    'qr_licensed_install_id',
+    'last_verified_at'
+  ]);
+
+  if (stored.license_status !== 'valid' || stored.qr_licensed_install_id !== installId) {
+    return false;
+  }
+
+  const verifiedAt = new Date(stored.last_verified_at || 0).getTime();
+  return Number.isFinite(verifiedAt) && Date.now() - verifiedAt < LICENSE_CACHE_TTL_MS;
+}
+
+async function checkQrLicenseStatus() {
   const installId = await getOrCreateInstallId();
-  const url = LICENSE_API +
+  const url = LICENSE_STATUS_API +
     '?product_id=' + encodeURIComponent(PRODUCT_ID) +
-    '&license_key=' + encodeURIComponent(licenseKey) +
     '&install_id=' + encodeURIComponent(installId);
+
   const res = await fetch(url);
-  return await res.json();
+  const data = await res.json();
+
+  if (data && data.success && data.active) {
+    await chrome.storage.local.set({
+      license_status: 'valid',
+      qr_licensed_install_id: installId,
+      last_verified_at: new Date().toISOString()
+    });
+    return true;
+  }
+
+  return false;
 }
 
 async function hasAccess() {
-  const stored = await chrome.storage.local.get(['license_key', 'license_status']);
-  const licenseKey = normalizeLicenseKey(stored.license_key);
+  const installId = await getOrCreateInstallId();
 
-  if (isValidLicenseKey(licenseKey)) {
-    try {
-      const result = await verifyLicenseKey(licenseKey);
-      if (result && result.success) {
-        await chrome.storage.local.set({
-          license_key: licenseKey,
-          license_status: 'valid',
-          last_verified_at: new Date().toISOString()
-        });
-        return true;
-      }
+  if (await hasFreshLicenseCache(installId)) {
+    return true;
+  }
 
-      await chrome.storage.local.set({ license_status: 'invalid' });
-    } catch (e) {
-      if (stored.license_status === 'valid') return true;
+  try {
+    if (await checkQrLicenseStatus()) return true;
+  } catch (e) {
+    if (await hasFreshLicenseCache(installId)) {
+      return true;
     }
   }
 
@@ -87,42 +106,86 @@ async function hasAccess() {
   return trial.active;
 }
 
-async function saveAndVerifyLicense() {
-  const btn = $('verifyLicenseBtn');
-  const input = $('licenseKey');
-  const licenseKey = normalizeLicenseKey(input && input.value);
+function setQrImage(approveUrl) {
+  const qr = $('licenseQr');
+  if (!qr) return;
 
-  if (!isValidLicenseKey(licenseKey)) {
-    setLicenseStatus('序號格式錯誤。', false);
-    return false;
+  qr.src = 'https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=' + encodeURIComponent(approveUrl);
+}
+
+function updateQrTimer() {
+  const timer = $('qrTimer');
+  if (!timer) return;
+
+  const remain = Math.max(0, qrExpireAt - Date.now());
+  const sec = Math.floor(remain / 1000);
+  const m = String(Math.floor(sec / 60)).padStart(2, '0');
+  const s = String(sec % 60).padStart(2, '0');
+  timer.textContent = m + ':' + s;
+
+  if (remain <= 0) {
+    createOrRefreshQrCode();
   }
+}
 
-  if (btn) btn.disabled = true;
-  setLicenseStatus('正在驗證授權...', true);
+async function createOrRefreshQrCode() {
+  const installId = await getOrCreateInstallId();
+  const installText = $('installIdText');
+  if (installText) installText.textContent = 'Install ID：' + installId;
+
+  setLicenseStatus('正在產生授權 QR Code...', false);
 
   try {
-    const result = await verifyLicenseKey(licenseKey);
-    if (!result || !result.success) {
-      await chrome.storage.local.set({ license_status: 'invalid' });
-      setLicenseStatus(result?.message || '授權失敗。', false);
-      return false;
-    }
-
-    await chrome.storage.local.set({
-      license_key: licenseKey,
-      license_status: 'valid',
-      last_verified_at: new Date().toISOString()
+    const res = await fetch(LICENSE_REQUEST_API, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        install_id: installId,
+        product_id: PRODUCT_ID
+      })
     });
 
-    if (input) input.value = licenseKey;
-    setLicenseStatus(result.first_bind ? '授權成功，已綁定此瀏覽器。' : '授權有效。', true);
-    return true;
+    const data = await res.json();
+    if (!data || !data.success) {
+      setLicenseStatus(data?.message || 'QR Code 產生失敗。', false);
+      return;
+    }
+
+    currentRequestId = data.request_id || '';
+    setQrImage(data.telegram_url || data.approve_url);
+    qrExpireAt = Date.now() + QR_LIFETIME_MS;
+    setLicenseStatus('請截圖/拍照給管理員，或讓管理員掃描後核准。', true);
+
+    if (!qrTimerId) {
+      qrTimerId = setInterval(updateQrTimer, 1000);
+    }
+    updateQrTimer();
+
+    startPollingApproval();
   } catch (e) {
     setLicenseStatus('無法連線授權伺服器，請稍後再試。', false);
-    return false;
-  } finally {
-    if (btn) btn.disabled = false;
   }
+}
+
+function startPollingApproval() {
+  if (pollTimerId) clearInterval(pollTimerId);
+
+  pollTimerId = setInterval(async () => {
+    try {
+      const ok = await checkQrLicenseStatus();
+      if (ok) {
+        clearInterval(pollTimerId);
+        pollTimerId = null;
+        setLicenseStatus('授權成功，已綁定此瀏覽器。', true);
+        const startBtn = $('startBtn');
+        if (startBtn) startBtn.disabled = false;
+        const panel = $('licensePanel');
+        if (panel) setTimeout(() => panel.style.display = 'none', 1200);
+      }
+    } catch (e) {
+      // 保持輪詢，不中斷使用者等待流程
+    }
+  }, POLL_INTERVAL_MS);
 }
 
 function openResultPage() {
@@ -132,17 +195,11 @@ function openResultPage() {
 
 document.addEventListener('DOMContentLoaded', async () => {
   const startBtn = $('startBtn');
-  const verifyBtn = $('verifyLicenseBtn');
-  const stored = await chrome.storage.local.get(['license_key']);
+  const refreshQrBtn = $('refreshQrBtn');
 
-  if (stored.license_key && $('licenseKey')) {
-    $('licenseKey').value = stored.license_key;
-  }
-
-  if (verifyBtn) {
-    verifyBtn.addEventListener('click', async () => {
-      const ok = await saveAndVerifyLicense();
-      if (ok && startBtn) startBtn.disabled = false;
+  if (refreshQrBtn) {
+    refreshQrBtn.addEventListener('click', async () => {
+      await createOrRefreshQrCode();
     });
   }
 
@@ -156,7 +213,17 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
 
       startBtn.disabled = false;
-      showLicensePanel('請輸入授權序號後繼續使用。');
+      showLicensePanel('請等待管理員核准 QR Code 授權。');
+      await createOrRefreshQrCode();
     });
   }
+
+  // 如果已經沒有授權，先準備 QR Code，讓使用者不用多按一次。
+  try {
+    const allowed = await hasAccess();
+    if (!allowed) {
+      showLicensePanel('請等待管理員核准 QR Code 授權。');
+      await createOrRefreshQrCode();
+    }
+  } catch (e) {}
 });
