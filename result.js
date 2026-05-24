@@ -16,6 +16,7 @@ const PRODUCT_ID = 'listing_compare';
 const TRIAL_DAYS = 3;
 const TRIAL_STORAGE_KEY = 'trial_started_at_' + PRODUCT_ID;
 const LICENSE_CACHE_TTL_MS = 30 * 60 * 1000;
+let lastLicenseCheck = null;
 
 function $(id) { return document.getElementById(id); }
 function setStatus(msg) { const el = $('statusMsg'); if (el) el.textContent = msg; }
@@ -91,14 +92,29 @@ async function getTrialInfo() {
   };
 }
 
+function taiwanDateString() {
+  return new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString().slice(0, 10);
+}
+
+function isExpiredLicenseDate(expiresOn) {
+  return !/^\d{4}-\d{2}-\d{2}$/.test(String(expiresOn || '')) || taiwanDateString() > expiresOn;
+}
+
 async function hasFreshLicenseCache(installId) {
   const stored = await chrome.storage.local.get([
     'license_status',
     'qr_licensed_install_id',
-    'last_verified_at'
+    'last_verified_at',
+    'license_expires_on'
   ]);
 
   if (stored.license_status !== 'valid' || stored.qr_licensed_install_id !== installId) {
+    return false;
+  }
+
+  if (isExpiredLicenseDate(stored.license_expires_on)) {
+    lastLicenseCheck = { reason: 'expired', expires_on: stored.license_expires_on || null };
+    await chrome.storage.local.set({ license_status: 'invalid' });
     return false;
   }
 
@@ -116,15 +132,21 @@ async function checkQrLicenseStatus() {
   const data = await res.json();
 
   if (data && data.success && data.active) {
+    lastLicenseCheck = data;
     await chrome.storage.local.set({
       license_status: 'valid',
       qr_licensed_install_id: installId,
-      last_verified_at: new Date().toISOString()
+      last_verified_at: new Date().toISOString(),
+      license_expires_on: data.expires_on
     });
     return true;
   }
 
-  await chrome.storage.local.set({ license_status: 'invalid' });
+  lastLicenseCheck = data;
+  await chrome.storage.local.set({
+    license_status: 'invalid',
+    license_expires_on: data?.expires_on || null
+  });
   return false;
 }
 
@@ -157,7 +179,9 @@ async function checkLicenseAccess() {
   return {
     allowed: false,
     mode: 'expired',
-    message: '請回到擴充工具視窗，產生 QR Code 並請管理員核准。'
+    message: lastLicenseCheck?.reason === 'expired'
+      ? `授權已於 ${lastLicenseCheck.expires_on || '設定期限'} 到期，請回到擴充工具重新產生 QR Code 授權。`
+      : '請回到擴充工具視窗，產生 QR Code 並請管理員核准。'
   };
 }
 
@@ -720,7 +744,7 @@ async function startIfAccessAllowed() {
     $('progress').style.display = '';
     $('progress').innerHTML =
       '<h2 style="color:#c62828;margin:0 0 12px;">需要授權</h2>' +
-      '<div class="error">請從擴充工具按鈕開啟，產生 QR Code 並請管理員核准後繼續使用。</div>';
+      '<div class="error">' + access.message + '</div>';
     return;
   }
 
