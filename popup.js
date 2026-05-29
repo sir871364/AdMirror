@@ -1,5 +1,6 @@
 const LICENSE_REQUEST_API = 'https://ycut-license-api.sir8713642.workers.dev/api/request-license';
 const LICENSE_STATUS_API = 'https://ycut-license-api.sir8713642.workers.dev/api/license-status';
+const TRIAL_STATUS_API = 'https://ycut-license-api.sir8713642.workers.dev/api/trial-status';
 const PRODUCT_ID = 'listing_compare';
 const TRIAL_DAYS = 3;
 const TRIAL_STORAGE_KEY = 'trial_started_at_' + PRODUCT_ID;
@@ -38,7 +39,67 @@ async function getOrCreateInstallId() {
   return installId;
 }
 
-async function getTrialInfo() {
+function setInstallIdentityText({ installId, googleEmail = '', licenseKey = '' }) {
+  const installText = $('installIdText');
+  if (!installText) return;
+
+  if (googleEmail) {
+    installText.textContent = 'Install ID：' + installId + '\nGoogle：' + googleEmail;
+    return;
+  }
+
+  installText.textContent = (licenseKey ? 'License：' + licenseKey + '\n' : '') +
+    'Install ID：' + installId;
+}
+
+async function getChromeGoogleAccount() {
+  if (!chrome.identity || !chrome.identity.getProfileUserInfo) {
+    return null;
+  }
+
+  return await new Promise((resolve) => {
+    chrome.identity.getProfileUserInfo({ accountStatus: 'ANY' }, (info) => {
+      if (chrome.runtime.lastError || !info || !info.id || !info.email) {
+        resolve(null);
+        return;
+      }
+
+      resolve({
+        google_sub: info.id,
+        google_email: info.email
+      });
+    });
+  });
+}
+
+function googleAccountRequiredMessage() {
+  return '請先在 Chrome 登入 Google 帳號，才能開始試用或產生授權 QR Code。已授權的電腦不受影響。';
+}
+
+async function getTrialInfo(googleAccount, installId) {
+  if (googleAccount || installId) {
+    const body = {
+      product_id: PRODUCT_ID,
+      install_id: installId
+    };
+
+    if (googleAccount) {
+      body.google_sub = googleAccount.google_sub;
+      body.google_email = googleAccount.google_email;
+    }
+
+    const res = await fetch(TRIAL_STATUS_API, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    const data = await res.json();
+    if (data && data.success) {
+      return { active: !!data.active };
+    }
+    return { active: false };
+  }
+
   const now = Date.now();
   const stored = await chrome.storage.local.get([TRIAL_STORAGE_KEY]);
   let startedAt = Number(stored[TRIAL_STORAGE_KEY] || 0);
@@ -65,7 +126,9 @@ async function hasFreshLicenseCache(installId) {
     'license_status',
     'qr_licensed_install_id',
     'last_verified_at',
-    'license_expires_on'
+    'license_expires_on',
+    'license_key',
+    'license_google_email'
   ]);
 
   if (stored.license_status !== 'valid' || stored.qr_licensed_install_id !== installId) {
@@ -79,7 +142,15 @@ async function hasFreshLicenseCache(installId) {
   }
 
   const verifiedAt = new Date(stored.last_verified_at || 0).getTime();
-  return Number.isFinite(verifiedAt) && Date.now() - verifiedAt < LICENSE_CACHE_TTL_MS;
+  const fresh = Number.isFinite(verifiedAt) && Date.now() - verifiedAt < LICENSE_CACHE_TTL_MS;
+  if (fresh) {
+    setInstallIdentityText({
+      installId,
+      googleEmail: stored.license_google_email || '',
+      licenseKey: stored.license_key || ''
+    });
+  }
+  return fresh;
 }
 
 async function checkQrLicenseStatus() {
@@ -97,7 +168,14 @@ async function checkQrLicenseStatus() {
       license_status: 'valid',
       qr_licensed_install_id: installId,
       last_verified_at: new Date().toISOString(),
-      license_expires_on: data.expires_on
+      license_expires_on: data.expires_on,
+      license_key: data.license_key || '',
+      license_google_email: data.google_email || ''
+    });
+    setInstallIdentityText({
+      installId,
+      googleEmail: data.google_email || '',
+      licenseKey: data.license_key || ''
     });
     return true;
   }
@@ -125,7 +203,14 @@ async function hasAccess() {
     }
   }
 
-  const trial = await getTrialInfo();
+  const googleAccount = await getChromeGoogleAccount();
+  if (googleAccount) {
+    await chrome.storage.local.set({ google_account: googleAccount });
+  } else {
+    await chrome.storage.local.remove('google_account');
+  }
+
+  const trial = await getTrialInfo(googleAccount, installId);
   return trial.active;
 }
 
@@ -153,8 +238,24 @@ function updateQrTimer() {
 
 async function createOrRefreshQrCode(statusMessage = '') {
   const installId = await getOrCreateInstallId();
-  const installText = $('installIdText');
-  if (installText) installText.textContent = 'Install ID：' + installId;
+  const googleAccount = await getChromeGoogleAccount();
+  setInstallIdentityText({
+    installId,
+    googleEmail: googleAccount?.google_email || ''
+  });
+
+  const licenseRequestBody = {
+    install_id: installId,
+    product_id: PRODUCT_ID
+  };
+
+  if (googleAccount) {
+    licenseRequestBody.google_sub = googleAccount.google_sub;
+    licenseRequestBody.google_email = googleAccount.google_email;
+    await chrome.storage.local.set({ google_account: googleAccount });
+  } else {
+    await chrome.storage.local.remove('google_account');
+  }
 
   setLicenseStatus('正在產生授權 QR Code...', false);
 
@@ -162,10 +263,7 @@ async function createOrRefreshQrCode(statusMessage = '') {
     const res = await fetch(LICENSE_REQUEST_API, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        install_id: installId,
-        product_id: PRODUCT_ID
-      })
+      body: JSON.stringify(licenseRequestBody)
     });
 
     const data = await res.json();
@@ -236,7 +334,9 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
 
       startBtn.disabled = false;
-      const message = lastLicenseCheck?.reason === 'expired'
+      const message = lastLicenseCheck?.reason === 'google_required'
+        ? googleAccountRequiredMessage()
+        : lastLicenseCheck?.reason === 'expired'
         ? `授權已於 ${lastLicenseCheck.expires_on || '設定期限'} 到期，請重新掃描 QR Code 授權。`
         : '請等待管理員核准 QR Code 授權。';
       showLicensePanel(message);
@@ -248,7 +348,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   try {
     const allowed = await hasAccess();
     if (!allowed) {
-      const message = lastLicenseCheck?.reason === 'expired'
+      const message = lastLicenseCheck?.reason === 'google_required'
+        ? googleAccountRequiredMessage()
+        : lastLicenseCheck?.reason === 'expired'
         ? `授權已於 ${lastLicenseCheck.expires_on || '設定期限'} 到期，請重新掃描 QR Code 授權。`
         : '請等待管理員核准 QR Code 授權。';
       showLicensePanel(message);
