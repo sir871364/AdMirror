@@ -44,7 +44,11 @@ AdMirror/
 ├── manifest.json           # 擴充功能設定 (Manifest V3)
 ├── popup.html              # 擴充功能入口 UI
 ├── popup.js                # 試用 / 授權驗證與開啟結果頁
-├── result.html             # 比對結果頁與使用須知
+├── disclaimer.html         # 獨立的首次使用須知與 readonly 重看頁
+├── disclaimer.css          # 使用須知頁面樣式
+├── disclaimer.js           # 捲動、同意、關閉與 readonly 操作
+├── src/disclaimer.js       # 版本化同意紀錄的共用 storage 模組
+├── result.html             # 比對進度與結果頁
 ├── result.js               # i智慧 / 591 資料抓取、比對與結果渲染
 ├── icon.png                # 擴充功能圖示
 ├── ★安裝說明★.html          # 圖文安裝與使用說明
@@ -57,10 +61,12 @@ AdMirror/
 ```mermaid
 flowchart LR
     A[popup.js<br/>開始自動比對] --> B{授權或試用有效?}
-    B -->|是| C[result.html<br/>開啟結果頁]
-    B -->|否| D[顯示授權提示]
-    C --> E[抓取 i智慧關注物件]
-    C --> F[抓取 591開啟中廣告]
+    B -->|是| C{已同意首次使用須知?}
+    C -->|否| D[disclaimer.html<br/>閱讀並儲存同意紀錄後關閉]
+    B -->|否| Q[顯示 QR Code 授權流程]
+    C -->|是| R[result.html<br/>開啟結果頁]
+    R --> E[抓取 i智慧關注物件]
+    R --> F[抓取 591 開啟中廣告]
     E --> G[正規化社區 / 價格 / 坪數 / 樓層]
     F --> G
     G --> H[產生比對結果與建議動作]

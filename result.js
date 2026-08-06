@@ -1,16 +1,12 @@
 // ============================================================
 // 591 vs i智慧 自動比對工具 v6
 // ============================================================
-// v6 新增：
-//   ★ 首次使用須顯示使用須知並同意才能用
-//   ★ 結果頁顯示小提醒列，可隨時重看須知
+// v6 新增：結果頁顯示小提醒列，可隨時重看須知
 // v5 已有：
 //   ★ 健康檢查：偵測 API 異常並警告
 //   ★ 備用模式：API 失敗時自動退回 DOM 抓取
 // ============================================================
 
-const DISCLAIMER_VERSION = 1;
-const DISCLAIMER_STORAGE_KEY = 'disclaimerAccepted_v' + DISCLAIMER_VERSION;
 const LICENSE_STATUS_API = 'https://ycut-license-api.sir8713642.workers.dev/api/license-status';
 const TRIAL_STATUS_API = 'https://ycut-license-api.sir8713642.workers.dev/api/trial-status';
 const PRODUCT_ID = 'listing_compare';
@@ -243,14 +239,6 @@ async function checkLicenseAccess() {
       ? `授權已於 ${lastLicenseCheck.expires_on || '設定期限'} 到期，請回到擴充工具重新產生 QR Code 授權。`
       : '請回到擴充工具視窗，產生 QR Code 並請管理員核准。'
   };
-}
-
-async function refreshLicenseUi() {
-  return await checkLicenseAccess();
-}
-
-async function saveAndVerifyLicenseFromInput() {
-  return false;
 }
 
 // ============ i智慧 抓取（API + DOM 備用）============
@@ -745,7 +733,9 @@ function showResults(watchlist, ads, warns, modes) {
 
   // 綁定「重看使用須知」連結
   const viewLink = $('viewDisclaimerLink');
-  if (viewLink) viewLink.addEventListener('click', showDisclaimerModal);
+  if (viewLink) viewLink.addEventListener('click', () => {
+    chrome.tabs.create({ url: chrome.runtime.getURL('disclaimer.html?readonly=1') });
+  });
 }
 
 // ============ 主流程 ============
@@ -781,25 +771,10 @@ async function main() {
   }
 }
 
-// ============ 使用須知同意流程 ============
-
-function showDisclaimerModal() {
-  // 把首次同意畫面內容複製到 modal
-  const src = document.querySelector('#disclaimer .disclaimer-scroll');
-  const dst = $('disclaimerScrollReadonly');
-  if (src && dst) dst.innerHTML = src.innerHTML;
-  $('disclaimerModal').classList.add('show');
-}
-
-function hideDisclaimerModal() {
-  $('disclaimerModal').classList.remove('show');
-}
-
 async function startIfAccessAllowed() {
   const access = await checkLicenseAccess();
 
   if (!access.allowed) {
-    $('disclaimer').style.display = 'none';
     $('output').style.display = 'none';
     $('progress').style.display = '';
     $('progress').innerHTML =
@@ -808,108 +783,8 @@ async function startIfAccessAllowed() {
     return;
   }
 
-  $('disclaimer').style.display = 'none';
   $('progress').style.display = '';
   main();
 }
 
-function showDisclaimerScreen() {
-  $('progress').style.display = 'none';
-  $('output').style.display = 'none';
-  $('disclaimer').style.display = 'block';
-
-  const scroll = $('disclaimerScroll');
-  const hint = $('scrollHint');
-  const check = $('agreeCheck');
-  const agree = $('agreeBtn');
-  const verifyBtn = $('verifyLicenseBtn');
-  let scrolledToBottom = false;
-  let accessAllowed = false;
-
-  function refresh() {
-    agree.disabled = !(accessAllowed && scrolledToBottom && check.checked);
-  }
-
-  refreshLicenseUi().then((access) => {
-    accessAllowed = access.allowed;
-    refresh();
-  });
-
-  if (verifyBtn) {
-    verifyBtn.addEventListener('click', async () => {
-      const ok = await saveAndVerifyLicenseFromInput();
-      if (ok) {
-        accessAllowed = true;
-        refresh();
-      }
-    });
-  }
-
-  scroll.addEventListener('scroll', () => {
-    // 容忍 5px 誤差
-    if (scroll.scrollTop + scroll.clientHeight >= scroll.scrollHeight - 5) {
-      if (!scrolledToBottom) {
-        scrolledToBottom = true;
-        hint.textContent = '✓ 已捲動到底，請勾選下方並確認';
-        hint.classList.add('done');
-        check.disabled = false;
-      }
-    }
-  });
-  // 內容很短時，初始就已可見全部
-  setTimeout(() => {
-    if (scroll.scrollHeight <= scroll.clientHeight + 5) {
-      scrolledToBottom = true;
-      hint.textContent = '✓ 已顯示全部內容，請勾選下方並確認';
-      hint.classList.add('done');
-      check.disabled = false;
-    }
-  }, 100);
-
-  check.addEventListener('change', refresh);
-
-  agree.addEventListener('click', async () => {
-    const access = await checkLicenseAccess();
-    if (!access.allowed) {
-      accessAllowed = false;
-      setLicenseStatus(access.message, 'bad');
-      refresh();
-      return;
-    }
-
-    await chrome.storage.local.set({
-      [DISCLAIMER_STORAGE_KEY]: {
-        accepted: true,
-        timestamp: Date.now(),
-        date: new Date().toISOString()
-      }
-    });
-    startIfAccessAllowed();
-  });
-
-  $('disagreeBtn').addEventListener('click', () => {
-    window.close();
-  });
-}
-
-async function checkDisclaimerAndStart() {
-  // 綁定 modal 關閉按鈕（無論首次或非首次都要）
-  const modalCloseBtn = $('modalCloseBtn');
-  if (modalCloseBtn) modalCloseBtn.addEventListener('click', hideDisclaimerModal);
-  const modalBg = $('disclaimerModal');
-  if (modalBg) modalBg.addEventListener('click', (e) => {
-    if (e.target === modalBg) hideDisclaimerModal();
-  });
-
-  const stored = await chrome.storage.local.get(DISCLAIMER_STORAGE_KEY);
-  const accepted = stored[DISCLAIMER_STORAGE_KEY] && stored[DISCLAIMER_STORAGE_KEY].accepted;
-  if (accepted) {
-    // 已同意，仍需通過授權 gate
-    startIfAccessAllowed();
-  } else {
-    // 首次：顯示同意畫面
-    showDisclaimerScreen();
-  }
-}
-
-checkDisclaimerAndStart();
+startIfAccessAllowed();

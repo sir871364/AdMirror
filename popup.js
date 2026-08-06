@@ -1,3 +1,5 @@
+import { getDisclaimerAccepted } from './src/disclaimer.js';
+
 const LICENSE_REQUEST_API = 'https://ycut-license-api.sir8713642.workers.dev/api/request-license';
 const LICENSE_STATUS_API = 'https://ycut-license-api.sir8713642.workers.dev/api/license-status';
 const TRIAL_STATUS_API = 'https://ycut-license-api.sir8713642.workers.dev/api/trial-status';
@@ -314,6 +316,34 @@ function openResultPage() {
   window.close();
 }
 
+async function openDisclaimerPage() {
+  const disclaimerUrl = chrome.runtime.getURL('disclaimer.html');
+  const tabs = await chrome.tabs.query({});
+  const existingTab = tabs.find((tab) =>
+    Number.isInteger(tab.id) && String(tab.url || '').split('?')[0] === disclaimerUrl
+  );
+
+  if (existingTab) {
+    if (Number.isInteger(existingTab.windowId)) {
+      await chrome.windows.update(existingTab.windowId, { focused: true });
+    }
+    await chrome.tabs.update(existingTab.id, { active: true });
+  } else {
+    await chrome.tabs.create({ url: disclaimerUrl });
+  }
+
+  window.close();
+}
+
+async function continueAfterAccessCheck() {
+  if (await getDisclaimerAccepted()) {
+    openResultPage();
+    return;
+  }
+
+  await openDisclaimerPage();
+}
+
 document.addEventListener('DOMContentLoaded', async () => {
   const startBtn = $('startBtn');
   const refreshQrBtn = $('refreshQrBtn');
@@ -329,7 +359,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       startBtn.disabled = true;
       const allowed = await hasAccess();
       if (allowed) {
-        openResultPage();
+        await continueAfterAccessCheck();
         return;
       }
 
