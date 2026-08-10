@@ -68,6 +68,16 @@ function testIntegrationStructure() {
   const manifest = JSON.parse(read('manifest.json'));
 
   assert.match(popupHtml, /<script type="module" src="popup\.js"><\/script>/);
+  assert.match(popupHtml, /id="appTitle"/);
+  assert.match(popupHtml, /id="licenseExpiryInfo"/);
+  assert.match(popupHtml, /id="versionText"/);
+  assert.match(popupJs, /chrome\.runtime\.getManifest\(\)\.version/);
+  assert.equal(popupHtml.includes('id="earlyLicenseBtn"'), false);
+  assert.match(popupJs, /lastAccessMode = trial\.active \? 'trial' : 'expired'/);
+  assert.match(popupJs, /appTitle\.addEventListener\('click'/);
+  assert.match(popupJs, /event\.ctrlKey && event\.shiftKey && event\.button === 0/);
+  assert.match(popupJs, /showLicenseExpiryInfo\(stored\.license_expires_on/);
+  assert.match(popupJs, /createOrRefreshQrCode\('試用仍會照常保留/);
   assert.match(popupJs, /if \(await getDisclaimerAccepted\(\)\)/);
   assert.match(popupJs, /chrome\.runtime\.getURL\('disclaimer\.html'\)/);
   assert.match(popupJs, /chrome\.runtime\.getURL\('result\.html'\)/);

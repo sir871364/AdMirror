@@ -5,11 +5,12 @@
 <style>
   * { box-sizing: border-box; font-family: "Microsoft JhengHei", sans-serif; }
   body { width: 280px; margin: 0; padding: 16px; background: #fff; }
-  h1 { font-size: 14px; color: #ff7a00; margin: 0 0 4px; }
+  h1 { font-size: 14px; color: #ff7a00; margin: 0 0 4px; user-select: none; }
   p { font-size: 12px; color: #666; margin: 0 0 12px; line-height: 1.4; }
   button { width: 100%; background: #ff7a00; color: white; border: 0; padding: 12px; font-size: 14px; font-weight: bold; border-radius: 6px; cursor: pointer; }
   button:hover { background: #e56d00; }
   button:disabled { background: #ccc; cursor: not-allowed; }
+  .license-expiry-info { display: none; margin: 0 0 10px; padding: 8px; border: 1px solid #b7dfd1; border-radius: 6px; background: #f0faf6; color: #12805c; font-size: 12px; text-align: center; }
   .license-panel { display: none; margin-top: 12px; padding-top: 12px; border-top: 1px solid #eee; text-align:center; }
   .qr-box { width: 210px; height: 210px; margin: 10px auto; background:#fff; border:1px solid #eee; border-radius:8px; display:flex; align-items:center; justify-content:center; overflow:hidden; }
   .qr-box img { width: 200px; height: 200px; display:block; }
@@ -18,12 +19,15 @@
   .license-status { font-size: 12px; line-height: 1.45; margin-top: 8px; color: #666; }
   .license-status.ok { color: #12805c; }
   .license-status.bad { color: #c62828; }
-  .small { font-size: 11px; color: #999; margin-top: 10px; text-align: center; }
+  .footer { position: relative; min-height: 14px; margin-top: 10px; }
+  .small { font-size: 11px; color: #999; text-align: center; }
+  .version { position: absolute; right: 0; bottom: 0; font-size: 10px; color: #bbb; line-height: 1; }
 </style>
 </head>
 <body>
-  <h1>591 vs i智慧 自動比對</h1>
+  <h1 id="appTitle">591 vs i智慧 自動比對</h1>
   <p>按下按鈕後會自動抓取兩邊資料、比對社區與總價，幾秒鐘後在新分頁顯示結果。</p>
+  <div id="licenseExpiryInfo" class="license-expiry-info" aria-live="polite"></div>
   <button id="startBtn">🔍 開始自動比對</button>
   <div class="license-panel" id="licensePanel">
     <div style="font-size:13px;font-weight:bold;color:#444;margin-bottom:4px;">請管理員掃描 QR Code 核准</div>
@@ -33,7 +37,10 @@
     <div id="licenseStatus" class="license-status">正在產生授權 QR Code...</div>
     <div id="installIdText" class="install-id"></div>
   </div>
-  <div class="small">需先登入 i智慧 與 591 會員中心</div>
+  <div class="footer">
+    <div class="small">需先登入 i智慧 與 591 會員中心</div>
+    <div id="versionText" class="version" aria-label="擴充工具版本"></div>
+  </div>
   <script type="module" src="popup.js"></script>
 </body>
 </html>
