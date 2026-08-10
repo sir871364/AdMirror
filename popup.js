@@ -1,3 +1,5 @@
+import { getDisclaimerAccepted } from './src/disclaimer.js';
+
 const LICENSE_REQUEST_API = 'https://ycut-license-api.sir8713642.workers.dev/api/request-license';
 const LICENSE_STATUS_API = 'https://ycut-license-api.sir8713642.workers.dev/api/license-status';
 const TRIAL_STATUS_API = 'https://ycut-license-api.sir8713642.workers.dev/api/trial-status';
@@ -16,6 +18,7 @@ let qrTimerId = null;
 let pollTimerId = null;
 let currentRequestId = '';
 let lastLicenseCheck = null;
+let lastAccessMode = 'unknown';
 
 function setLicenseStatus(message, ok = false) {
   const el = $('licenseStatus');
@@ -28,6 +31,18 @@ function showLicensePanel(message) {
   const panel = $('licensePanel');
   if (panel) panel.style.display = 'block';
   if (message) setLicenseStatus(message, false);
+}
+
+function hideLicenseExpiryInfo() {
+  const info = $('licenseExpiryInfo');
+  if (info) info.style.display = 'none';
+}
+
+function showLicenseExpiryInfo(expiresOn) {
+  const info = $('licenseExpiryInfo');
+  if (!info) return;
+  info.textContent = '授權到期日：' + (expiresOn || '未提供');
+  info.style.display = 'block';
 }
 
 async function getOrCreateInstallId() {
@@ -192,13 +207,18 @@ async function hasAccess() {
   const installId = await getOrCreateInstallId();
 
   if (await hasFreshLicenseCache(installId)) {
+    lastAccessMode = 'license';
     return true;
   }
 
   try {
-    if (await checkQrLicenseStatus()) return true;
+    if (await checkQrLicenseStatus()) {
+      lastAccessMode = 'license';
+      return true;
+    }
   } catch (e) {
     if (await hasFreshLicenseCache(installId)) {
+      lastAccessMode = 'license';
       return true;
     }
   }
@@ -211,6 +231,7 @@ async function hasAccess() {
   }
 
   const trial = await getTrialInfo(googleAccount, installId);
+  lastAccessMode = trial.active ? 'trial' : 'expired';
   return trial.active;
 }
 
@@ -237,6 +258,7 @@ function updateQrTimer() {
 }
 
 async function createOrRefreshQrCode(statusMessage = '') {
+  hideLicenseExpiryInfo();
   const installId = await getOrCreateInstallId();
   const googleAccount = await getChromeGoogleAccount();
   setInstallIdentityText({
@@ -300,6 +322,7 @@ function startPollingApproval() {
         setLicenseStatus('授權成功，已綁定此瀏覽器。', true);
         const startBtn = $('startBtn');
         if (startBtn) startBtn.disabled = false;
+        lastAccessMode = 'license';
         const panel = $('licensePanel');
         if (panel) setTimeout(() => panel.style.display = 'none', 1200);
       }
@@ -314,9 +337,65 @@ function openResultPage() {
   window.close();
 }
 
+async function openDisclaimerPage() {
+  const disclaimerUrl = chrome.runtime.getURL('disclaimer.html');
+  const tabs = await chrome.tabs.query({});
+  const existingTab = tabs.find((tab) =>
+    Number.isInteger(tab.id) && String(tab.url || '').split('?')[0] === disclaimerUrl
+  );
+
+  if (existingTab) {
+    if (Number.isInteger(existingTab.windowId)) {
+      await chrome.windows.update(existingTab.windowId, { focused: true });
+    }
+    await chrome.tabs.update(existingTab.id, { active: true });
+  } else {
+    await chrome.tabs.create({ url: disclaimerUrl });
+  }
+
+  window.close();
+}
+
+async function continueAfterAccessCheck() {
+  if (await getDisclaimerAccepted()) {
+    openResultPage();
+    return;
+  }
+
+  await openDisclaimerPage();
+}
+
 document.addEventListener('DOMContentLoaded', async () => {
+  const appTitle = $('appTitle');
   const startBtn = $('startBtn');
   const refreshQrBtn = $('refreshQrBtn');
+  const versionText = $('versionText');
+  const initialAccessCheck = hasAccess();
+
+  if (versionText) {
+    versionText.textContent = 'v' + chrome.runtime.getManifest().version;
+  }
+
+  if (appTitle) {
+    appTitle.addEventListener('click', async (event) => {
+      if (!(event.ctrlKey && event.shiftKey && event.button === 0)) return;
+      event.preventDefault();
+
+      try {
+        const allowed = await initialAccessCheck;
+        if (allowed && lastAccessMode === 'license') {
+          const stored = await chrome.storage.local.get(['license_expires_on']);
+          showLicenseExpiryInfo(stored.license_expires_on || lastLicenseCheck?.expires_on || '');
+          return;
+        }
+
+        showLicensePanel('隱藏授權功能已開啟；產生 QR Code 不會縮短剩餘試用期。');
+        await createOrRefreshQrCode('試用仍會照常保留。請讓管理員掃描並核准 QR Code。');
+      } catch (e) {
+        showLicensePanel('無法確認授權狀態，請稍後再試。');
+      }
+    });
+  }
 
   if (refreshQrBtn) {
     refreshQrBtn.addEventListener('click', async () => {
@@ -329,7 +408,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       startBtn.disabled = true;
       const allowed = await hasAccess();
       if (allowed) {
-        openResultPage();
+        await continueAfterAccessCheck();
         return;
       }
 
@@ -346,7 +425,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // 如果已經沒有授權，先準備 QR Code，讓使用者不用多按一次。
   try {
-    const allowed = await hasAccess();
+    const allowed = await initialAccessCheck;
     if (!allowed) {
       const message = lastLicenseCheck?.reason === 'google_required'
         ? googleAccountRequiredMessage()
