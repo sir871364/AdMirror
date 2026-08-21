@@ -1,10 +1,13 @@
 import { getDisclaimerAccepted } from './src/disclaimer.js';
-
-const LICENSE_REQUEST_API = 'https://ycut-license-api.sir8713642.workers.dev/api/request-license';
-const LICENSE_STATUS_API = 'https://ycut-license-api.sir8713642.workers.dev/api/license-status';
-const TRIAL_STATUS_API = 'https://ycut-license-api.sir8713642.workers.dev/api/trial-status';
-const PRODUCT_ID = 'listing_compare';
-const TRIAL_DAYS = 3;
+import {
+  LICENSE_REQUEST_API,
+  LICENSE_STATUS_API,
+  PRODUCT_ID,
+  TRIAL_DAYS,
+  TRIAL_STATUS_API
+} from './src/config.js';
+import { classifyCoreLicenseStatus } from './src/core-access.js';
+import { createQrDataUrl } from './src/local-qr.mjs';
 const TRIAL_STORAGE_KEY = 'trial_started_at_' + PRODUCT_ID;
 
 const QR_LIFETIME_MS = 5 * 60 * 1000;
@@ -19,6 +22,7 @@ let pollTimerId = null;
 let currentRequestId = '';
 let lastLicenseCheck = null;
 let lastAccessMode = 'unknown';
+let lastSuspendedMessage = '';
 
 function setLicenseStatus(message, ok = false) {
   const el = $('licenseStatus');
@@ -36,6 +40,36 @@ function showLicensePanel(message) {
 function hideLicenseExpiryInfo() {
   const info = $('licenseExpiryInfo');
   if (info) info.style.display = 'none';
+}
+
+// 緊急停止：與「未授權」走不同的畫面。
+// 此時掃 QR Code 沒有意義（管理員核准後仍會被擋），所以只顯示停用訊息，
+// 並停掉倒數與輪詢，避免使用者白等。
+function showSuspendedState(message) {
+  const text = message || lastSuspendedMessage ||
+    '系統目前處於緊急停止狀態。\n\n請稍後再試。';
+
+  if (qrTimerId) { clearInterval(qrTimerId); qrTimerId = null; }
+  if (pollTimerId) { clearInterval(pollTimerId); pollTimerId = null; }
+
+  const startBtn = $('startBtn');
+  if (startBtn) {
+    startBtn.disabled = true;
+    startBtn.textContent = '⛔ 已暫停使用';
+  }
+
+  hideLicenseExpiryInfo();
+
+  const panel = $('licensePanel');
+  if (panel) panel.style.display = 'block';
+  const qrBox = document.querySelector('.qr-box');
+  if (qrBox) qrBox.style.display = 'none';
+  const timer = $('qrTimer');
+  if (timer) timer.style.display = 'none';
+  const refreshQrBtn = $('refreshQrBtn');
+  if (refreshQrBtn) refreshQrBtn.style.display = 'none';
+
+  setLicenseStatus(text, false);
 }
 
 function showLicenseExpiryInfo(expiresOn) {
@@ -168,16 +202,29 @@ async function hasFreshLicenseCache(installId) {
   return fresh;
 }
 
+// 回傳 'licensed' | 'suspended' | 'unlicensed' | 'unavailable'
+// 一律走 no-store，確保緊急停止不會被瀏覽器快取延遲。
 async function checkQrLicenseStatus() {
   const installId = await getOrCreateInstallId();
   const url = LICENSE_STATUS_API +
     '?product_id=' + encodeURIComponent(PRODUCT_ID) +
     '&install_id=' + encodeURIComponent(installId);
 
-  const res = await fetch(url);
+  const res = await fetch(url, { cache: 'no-store' });
   const data = await res.json();
+  const status = classifyCoreLicenseStatus(data);
 
-  if (data && data.success && data.active) {
+  if (status.decision === 'unavailable') return 'unavailable';
+
+  // 緊急停止是暫時狀態，不要把使用者原本有效的授權標成 invalid，
+  // 否則恢復後還得重新掃 QR Code。
+  if (status.decision === 'suspended') {
+    lastLicenseCheck = data;
+    lastSuspendedMessage = status.message;
+    return 'suspended';
+  }
+
+  if (status.decision === 'licensed') {
     lastLicenseCheck = data;
     await chrome.storage.local.set({
       license_status: 'valid',
@@ -192,7 +239,7 @@ async function checkQrLicenseStatus() {
       googleEmail: data.google_email || '',
       licenseKey: data.license_key || ''
     });
-    return true;
+    return 'licensed';
   }
 
   lastLicenseCheck = data;
@@ -200,27 +247,34 @@ async function checkQrLicenseStatus() {
     license_status: 'invalid',
     license_expires_on: data?.expires_on || null
   });
-  return false;
+  return 'unlicensed';
 }
 
 async function hasAccess() {
   const installId = await getOrCreateInstallId();
 
-  if (await hasFreshLicenseCache(installId)) {
-    lastAccessMode = 'license';
-    return true;
+  // 先問伺服器，本機快取只當離線備援。
+  // 若沿用「快取優先」，緊急停止最久要等 30 分鐘才會在 popup 生效。
+  let statusUnknown = false;
+  try {
+    const decision = await checkQrLicenseStatus();
+    if (decision === 'suspended') {
+      lastAccessMode = 'suspended';
+      return false;
+    }
+    if (decision === 'licensed') {
+      lastAccessMode = 'license';
+      return true;
+    }
+    if (decision === 'unavailable') statusUnknown = true;
+  } catch (e) {
+    statusUnknown = true;
   }
 
-  try {
-    if (await checkQrLicenseStatus()) {
-      lastAccessMode = 'license';
-      return true;
-    }
-  } catch (e) {
-    if (await hasFreshLicenseCache(installId)) {
-      lastAccessMode = 'license';
-      return true;
-    }
+  // 只有「問不到」才退回快取；伺服器明確說沒授權時不吃快取。
+  if (statusUnknown && await hasFreshLicenseCache(installId)) {
+    lastAccessMode = 'license';
+    return true;
   }
 
   const googleAccount = await getChromeGoogleAccount();
@@ -235,11 +289,11 @@ async function hasAccess() {
   return trial.active;
 }
 
-function setQrImage(approveUrl) {
+async function setQrImage(approveUrl) {
   const qr = $('licenseQr');
   if (!qr) return;
 
-  qr.src = 'https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=' + encodeURIComponent(approveUrl);
+  qr.src = await createQrDataUrl(approveUrl, 240);
 }
 
 function updateQrTimer() {
@@ -295,7 +349,7 @@ async function createOrRefreshQrCode(statusMessage = '') {
     }
 
     currentRequestId = data.request_id || '';
-    setQrImage(data.telegram_url || data.approve_url);
+    await setQrImage(data.telegram_url || data.approve_url);
     qrExpireAt = Date.now() + QR_LIFETIME_MS;
     setLicenseStatus(statusMessage || '請截圖/拍照給管理員，或讓管理員掃描後輸入備註與到期日核准。', true);
 
@@ -315,8 +369,18 @@ function startPollingApproval() {
 
   pollTimerId = setInterval(async () => {
     try {
-      const ok = await checkQrLicenseStatus();
-      if (ok) {
+      const decision = await checkQrLicenseStatus();
+
+      // 緊急停止期間再等下去也不會放行，直接停止輪詢並改顯示停用訊息。
+      if (decision === 'suspended') {
+        clearInterval(pollTimerId);
+        pollTimerId = null;
+        lastAccessMode = 'suspended';
+        showSuspendedState();
+        return;
+      }
+
+      if (decision === 'licensed') {
         clearInterval(pollTimerId);
         pollTimerId = null;
         setLicenseStatus('授權成功，已綁定此瀏覽器。', true);
@@ -383,6 +447,10 @@ document.addEventListener('DOMContentLoaded', async () => {
 
       try {
         const allowed = await initialAccessCheck;
+        if (lastAccessMode === 'suspended') {
+          showSuspendedState();
+          return;
+        }
         if (allowed && lastAccessMode === 'license') {
           const stored = await chrome.storage.local.get(['license_expires_on']);
           showLicenseExpiryInfo(stored.license_expires_on || lastLicenseCheck?.expires_on || '');
@@ -406,9 +474,22 @@ document.addEventListener('DOMContentLoaded', async () => {
   if (startBtn) {
     startBtn.addEventListener('click', async () => {
       startBtn.disabled = true;
-      const allowed = await hasAccess();
+      let allowed = false;
+      try {
+        allowed = await hasAccess();
+      } catch {
+        startBtn.disabled = false;
+        showLicensePanel('目前無法確認授權狀態，請稍後再試。');
+        return;
+      }
       if (allowed) {
         await continueAfterAccessCheck();
+        return;
+      }
+
+      // 緊急停止：不要引導使用者去掃 QR Code，核准了也一樣被擋。
+      if (lastAccessMode === 'suspended') {
+        showSuspendedState();
         return;
       }
 
@@ -426,6 +507,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   // 如果已經沒有授權，先準備 QR Code，讓使用者不用多按一次。
   try {
     const allowed = await initialAccessCheck;
+    if (lastAccessMode === 'suspended') {
+      showSuspendedState();
+      return;
+    }
     if (!allowed) {
       const message = lastLicenseCheck?.reason === 'google_required'
         ? googleAccountRequiredMessage()

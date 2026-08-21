@@ -7,13 +7,16 @@
 //   ★ 備用模式：API 失敗時自動退回 DOM 抓取
 // ============================================================
 
-const LICENSE_STATUS_API = 'https://ycut-license-api.sir8713642.workers.dev/api/license-status';
-const TRIAL_STATUS_API = 'https://ycut-license-api.sir8713642.workers.dev/api/trial-status';
-const PRODUCT_ID = 'listing_compare';
-const TRIAL_DAYS = 3;
+import {
+  LICENSE_STATUS_API,
+  PRODUCT_ID,
+  TRIAL_DAYS,
+  TRIAL_STATUS_API
+} from './src/config.js';
+import { classifyCoreLicenseStatus } from './src/core-access.js';
+
 const TRIAL_STORAGE_KEY = 'trial_started_at_' + PRODUCT_ID;
-const LICENSE_CACHE_TTL_MS = 30 * 60 * 1000;
-let lastLicenseCheck = null;
+const CORE_AUTH_TIMEOUT_MS = 8000;
 
 function $(id) { return document.getElementById(id); }
 function setStatus(msg) { const el = $('statusMsg'); if (el) el.textContent = msg; }
@@ -76,9 +79,9 @@ function refreshBatchFollowBtnUi() {
     btn.disabled = false;
   } else {
     btn.style.background = '#bdbdbd';
-    btn.style.cursor = 'default';
+    btn.style.cursor = 'not-allowed';
     btn.textContent = '🎯 無需加關注（0 筆）';
-    btn.disabled = false; // 保留可點狀態以支援 Ctrl+Shift 隱藏功能
+    btn.disabled = true;
   }
 }
 
@@ -176,7 +179,7 @@ function googleAccountRequiredMessage() {
   return '請先在 Chrome 登入 Google 帳號，才能開始試用或申請授權。已授權的電腦不受影響。';
 }
 
-async function getTrialInfo(googleAccount, installId) {
+async function getTrialInfo(googleAccount, installId, signal) {
   if (googleAccount || installId) {
     const body = {
       product_id: PRODUCT_ID,
@@ -191,8 +194,10 @@ async function getTrialInfo(googleAccount, installId) {
     const res = await fetch(TRIAL_STATUS_API, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
+      body: JSON.stringify(body),
+      signal
     });
+    if (!res.ok) throw new Error('Trial status request failed');
     const data = await res.json();
     if (data && data.success) {
       return {
@@ -202,7 +207,7 @@ async function getTrialInfo(googleAccount, installId) {
         active: !!data.active
       };
     }
-    return { active: false };
+    throw new Error('Invalid trial status response');
   }
 
   const now = Date.now();
@@ -225,104 +230,62 @@ async function getTrialInfo(googleAccount, installId) {
   };
 }
 
-function taiwanDateString() {
-  return new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString().slice(0, 10);
-}
-
-function isExpiredLicenseDate(expiresOn) {
-  return !/^\d{4}-\d{2}-\d{2}$/.test(String(expiresOn || '')) || taiwanDateString() > expiresOn;
-}
-
-async function hasFreshLicenseCache(installId) {
-  const stored = await chrome.storage.local.get([
-    'license_status',
-    'qr_licensed_install_id',
-    'last_verified_at',
-    'license_expires_on'
-  ]);
-
-  if (stored.license_status !== 'valid' || stored.qr_licensed_install_id !== installId) {
-    return false;
-  }
-
-  if (isExpiredLicenseDate(stored.license_expires_on)) {
-    lastLicenseCheck = { reason: 'expired', expires_on: stored.license_expires_on || null };
-    await chrome.storage.local.set({ license_status: 'invalid' });
-    return false;
-  }
-
-  const verifiedAt = new Date(stored.last_verified_at || 0).getTime();
-  return Number.isFinite(verifiedAt) && Date.now() - verifiedAt < LICENSE_CACHE_TTL_MS;
-}
-
-async function checkQrLicenseStatus() {
+async function checkLiveCoreAccess() {
   const installId = await getOrCreateInstallId();
   const url = LICENSE_STATUS_API +
     '?product_id=' + encodeURIComponent(PRODUCT_ID) +
     '&install_id=' + encodeURIComponent(installId);
-
-  const res = await fetch(url);
-  const data = await res.json();
-
-  if (data && data.success && data.active) {
-    lastLicenseCheck = data;
-    await chrome.storage.local.set({
-      license_status: 'valid',
-      qr_licensed_install_id: installId,
-      last_verified_at: new Date().toISOString(),
-      license_expires_on: data.expires_on
-    });
-    return true;
-  }
-
-  lastLicenseCheck = data;
-  await chrome.storage.local.set({
-    license_status: 'invalid',
-    license_expires_on: data?.expires_on || null
-  });
-  return false;
-}
-
-async function checkLicenseAccess() {
-  const installId = await getOrCreateInstallId();
-
-  if (await hasFreshLicenseCache(installId)) {
-    return { allowed: true, mode: 'license', message: '授權快取有效。' };
-  }
-
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), CORE_AUTH_TIMEOUT_MS);
   try {
-    if (await checkQrLicenseStatus()) {
+    const res = await fetch(url, { cache: 'no-store', signal: controller.signal });
+    if (!res.ok) throw new Error('License status request failed');
+    const data = await res.json();
+    const status = classifyCoreLicenseStatus(data);
+    if (status.decision === 'unavailable') throw new Error('Invalid license status response');
+    if (status.decision === 'suspended') {
+      return {
+        allowed: false,
+        mode: 'emergency_suspended',
+        message: status.message
+      };
+    }
+    if (status.decision === 'licensed') {
       return { allowed: true, mode: 'license', message: '授權有效。' };
     }
-  } catch (e) {
-    if (await hasFreshLicenseCache(installId)) {
-      return { allowed: true, mode: 'license', message: '授權暫以本機狀態通過，稍後會再驗證。' };
+    const googleAccount = await getChromeGoogleAccount();
+    const trial = await getTrialInfo(googleAccount, installId, controller.signal);
+    if (trial.active) {
+      return { allowed: true, mode: 'trial', message: '' };
     }
-  }
-
-  const googleAccount = await getChromeGoogleAccount();
-  if (googleAccount) {
-    await chrome.storage.local.set({ google_account: googleAccount });
-  } else {
-    await chrome.storage.local.remove('google_account');
-  }
-
-  const trial = await getTrialInfo(googleAccount, installId);
-  if (trial.active) {
     return {
-      allowed: true,
-      mode: 'trial',
-      message: ''
+      allowed: false,
+      mode: 'expired',
+      message: data.reason === 'expired'
+        ? `授權已於 ${data.expires_on || '設定期限'} 到期，請回到擴充工具重新產生 QR Code 授權。`
+        : '請回到擴充工具視窗，產生 QR Code 並請管理員核准。'
     };
+  } catch (e) {
+    return {
+      allowed: false,
+      mode: 'unavailable',
+      message: '目前無法確認授權狀態，請稍後再試。'
+    };
+  } finally {
+    clearTimeout(timeoutId);
   }
+}
 
-  return {
-    allowed: false,
-    mode: 'expired',
-    message: lastLicenseCheck?.reason === 'expired'
-      ? `授權已於 ${lastLicenseCheck.expires_on || '設定期限'} 到期，請回到擴充工具重新產生 QR Code 授權。`
-      : '請回到擴充工具視窗，產生 QR Code 並請管理員核准。'
-  };
+// 寫入型操作（加關注／取消關注）前的即時授權閘門。
+// 比對只在開頁時驗一次，但這些動作會實際寫入 i智慧，且不可還原，
+// 所以每次都重新向伺服器確認，讓緊急停止能立即生效（刻意不做快取）。
+async function assertCoreAccess() {
+  const access = await checkLiveCoreAccess();
+  if (!access.allowed) {
+    alert(access.message);
+    return false;
+  }
+  return true;
 }
 
 // ============ i智慧 抓取（API + DOM 備用）============
@@ -1377,20 +1340,7 @@ function showResults(watchlist, ads, warns, modes, apiUserStoreCode) {
 
   // 綁定「一鍵補齊關注」（batch）與單筆「加關注」按鈕
   const batchBtn = $('batchFollowBtn');
-  if (batchBtn) batchBtn.addEventListener('click', (e) => {
-    // 隱藏開發功能：Ctrl+Shift+左鍵 = 清空全部 i智慧 關注（無提示、無 confirm）
-    if (e.ctrlKey && e.shiftKey) {
-      // 動態掃描目前所有 watchlist（含清空後又加回來的）→ 從 DOM 取得
-      // 為了完整，仍用 showResults 時的 watchlist 為主，但過濾掉 data-type="removed" 的
-      const removedCodes = new Set();
-      document.querySelectorAll('tr[data-type="removed"]').forEach(tr => {
-        const c = tr.getAttribute('data-infocode') || tr.getAttribute('data-matchcode');
-        if (c) removedCodes.add(c);
-      });
-      const allWatchWithKey = watchlist.filter(w => w.caseKey && !removedCodes.has(w.code));
-      runBatchUnfollow(allWatchWithKey, { skipConfirm: true });
-      return;
-    }
+  if (batchBtn) batchBtn.addEventListener('click', () => {
     // 動態掃 DOM 拿當前所有 bad rows（含清空後從 ok/warn 變 bad 的）
     const currentBadAds = collectCurrentBadAds();
     runBatchFollow(currentBadAds, userStoreCode);
@@ -1427,6 +1377,7 @@ function batchUnfollowBarHtml(watchOnly) {
 
 async function runSingleUnfollow(btn, item) {
   const resultSpan = btn.parentElement.querySelector('.unfollow-single-result');
+  if (!(await assertCoreAccess())) return;
   if (!confirm('確定要取消 i智慧 關注「' + (item.community || item.code) + '」？此動作不可還原。')) return;
   btn.disabled = true;
   btn.textContent = '⏳ 取消中...';
@@ -1461,12 +1412,10 @@ async function runSingleUnfollow(btn, item) {
   }
 }
 
-async function runBatchUnfollow(items, opts) {
-  opts = opts || {};
+async function runBatchUnfollow(items) {
   if (!items || items.length === 0) return;
-  if (!opts.skipConfirm) {
-    if (!confirm('⚠ 確定要一次取消 ' + items.length + ' 筆 i智慧 關注？\n\n這通常用於清理「591 廣告已過期/成交但 i智慧 還在關注」的情況。\n\n請確認這 ' + items.length + ' 筆真的都是無效物件！此動作不可還原。')) return;
-  }
+  if (!(await assertCoreAccess())) return;
+  if (!confirm('⚠ 確定要一次取消 ' + items.length + ' 筆 i智慧 關注？\n\n這通常用於清理「591 廣告已過期/成交但 i智慧 還在關注」的情況。\n\n請確認這 ' + items.length + ' 筆真的都是無效物件！此動作不可還原。')) return;
 
   const batchBtn = $('batchUnfollowBtn');
   const logEl = $('unfollowLog');
@@ -1630,7 +1579,7 @@ async function runBatchUnfollow(items, opts) {
   }
 }
 
-// 上方大按鈕（永遠顯示，即使 591 多出 = 0 也保留，方便 Ctrl+Shift+Click 隱藏功能）
+// 上方「一鍵補齊 i智慧 關注」按鈕
 function batchFollowBarHtml(ad591Only) {
   const hasItems = ad591Only > 0;
   const bg = hasItems ? '#e8f5e9' : '#f5f5f5';
@@ -1641,16 +1590,18 @@ function batchFollowBarHtml(ad591Only) {
     : '目前沒有需要加關注的物件';
   const btnBg = hasItems ? '#12805c' : '#bdbdbd';
   const btnText = hasItems ? '🎯 全部加關注（' + ad591Only + ' 筆）' : '🎯 無需加關注（0 筆）';
-  const btnCursor = hasItems ? 'pointer' : 'default';
+  const btnCursor = hasItems ? 'pointer' : 'not-allowed';
+  const disabledAttr = hasItems ? '' : ' disabled';
   return '<div style="background:' + bg + ';border-left:4px solid ' + borderColor + ';padding:12px 18px;margin-bottom:14px;border-radius:6px;display:flex;justify-content:space-between;align-items:center;">' +
     '<div><strong style="color:' + titleColor + ';">🎯 一鍵補齊 i智慧 關注</strong>' +
     '<div style="font-size:12px;color:#555;margin-top:2px;">' + subtitle + '</div></div>' +
-    '<button id="batchFollowBtn" style="background:' + btnBg + ';color:white;border:0;padding:10px 18px;font-size:14px;border-radius:6px;cursor:' + btnCursor + ';font-weight:bold;">' +
+    '<button id="batchFollowBtn"' + disabledAttr + ' style="background:' + btnBg + ';color:white;border:0;padding:10px 18px;font-size:14px;border-radius:6px;cursor:' + btnCursor + ';font-weight:bold;">' +
     btnText + '</button></div>';
 }
 
 async function runSingleFollow(btn, ad, userStoreCode) {
   const resultSpan = btn.parentElement.querySelector('.follow-single-result');
+  if (!(await assertCoreAccess())) return;
   btn.disabled = true;
   btn.textContent = '⏳ 搜尋中...';
   try {
@@ -1711,6 +1662,7 @@ async function runSingleFollow(btn, ad, userStoreCode) {
 
 async function runBatchFollow(items, userStoreCode) {
   if (!items || items.length === 0) return;
+  if (!(await assertCoreAccess())) return;
   const batchBtn = $('batchFollowBtn');
   const logEl = $('followLog');          // 上方：只放進度條 + summary
   const itemLogEl = $('followItemLog');  // 下方（表格底下）：逐筆詳細狀態
@@ -1906,13 +1858,13 @@ async function main() {
 }
 
 async function startIfAccessAllowed() {
-  const access = await checkLicenseAccess();
+  const access = await checkLiveCoreAccess();
 
   if (!access.allowed) {
     $('output').style.display = 'none';
     $('progress').style.display = '';
     $('progress').innerHTML =
-      '<h2 style="color:#c62828;margin:0 0 12px;">需要授權</h2>' +
+      '<h2 style="color:#c62828;margin:0 0 12px;">無法開始比對</h2>' +
       '<div class="error">' + access.message + '</div>';
     return;
   }
