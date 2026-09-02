@@ -1,6 +1,6 @@
 {
   "name": "admirror-chrome-extension",
-  "version": "1.7.0",
+  "version": "1.7.1",
   "private": true,
   "scripts": {
     "test": "node tests/build-check.cjs && node tests/disclaimer.test.cjs && node tests/privacy-license.test.cjs && node tests/kill-switch.test.cjs",
