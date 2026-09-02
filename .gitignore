@@ -1,0 +1,5 @@
+node_modules/
+
+# 打包／備份用的壓縮檔不進版控。
+# 曾經有一份含整個 .git 的 AdMirror-main.zip 落在專案根目錄。
+*.zip
