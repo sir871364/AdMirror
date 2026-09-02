@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="zh-TW">
+<head>
+<meta charset="utf-8">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 1280px; height: 800px; overflow: hidden; }
+  body {
+    font-family: "Microsoft JhengHei", "PingFang TC", sans-serif;
+    background: #0e748c;
+    display: flex; flex-direction: column; align-items: center;
+    padding: 26px 0 0;
+  }
+  h1 { color: #fff; font-size: 26px; margin-bottom: 4px; }
+  p  { color: rgba(255,255,255,.85); font-size: 15px; margin-bottom: 18px; }
+  .frame {
+    width: 1180px; height: 690px;
+    background: #fff; border-radius: 12px 12px 0 0; overflow: hidden;
+    box-shadow: 0 -6px 50px rgba(0,0,0,.3);
+  }
+  .bar { height: 34px; background: #e9edf1; display: flex; align-items: center; padding: 0 13px; gap: 7px; }
+  .dot { width: 11px; height: 11px; border-radius: 50%; }
+  iframe { width: 1180px; height: 656px; border: 0; display: block; }
+</style>
+</head>
+<body>
+  <h1>逐筆對照報表，要處理的排在最前面</h1>
+  <p>每一列都直接寫出建議動作：改成多少錢、該不該下架、還是需要人工再確認一次</p>
+  <div class="frame">
+    <div class="bar">
+      <span class="dot" style="background:#ff5f57"></span>
+      <span class="dot" style="background:#febc2e"></span>
+      <span class="dot" style="background:#28c840"></span>
+    </div>
+    <iframe src="stub-report.html"></iframe>
+  </div>
+</body>
+</html>
