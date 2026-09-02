@@ -152,13 +152,14 @@ function paint(d) {
     // 欄位名單只有在對欄位對應時才用得到，平常收起來。
     const detail = ((d.ismartEnvelopeKeys || []).length ? `外層欄位：${d.ismartEnvelopeKeys.join(', ')}\n` : '')
       + (d.ismartRaw ? `物件欄位：${Object.keys(d.ismartRaw).join(', ')}` : '');
-    $('diagDetail').textContent = detail;
+    $('diagDetail').textContent =
+      (d.pagingMethod ? '翻頁定位：' + d.pagingMethod + '\n' : '') + detail;
   }
 }
 
 async function refresh() {
   const d = await chrome.storage.local.get(
-    ['capStatus', 'capError', 'capPct', 'lastCaptureAt', 'ismartRows', 'ismartTotal', 'ismartRaw', 'ismartEnvelopeKeys']);
+    ['capStatus', 'capError', 'capPct', 'lastCaptureAt', 'ismartRows', 'ismartTotal', 'ismartRaw', 'ismartEnvelopeKeys', 'pagingMethod']);
   paint(d);
 
   const m = await send('manualStatus');
@@ -173,7 +174,7 @@ async function refresh() {
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== 'local') return;
   chrome.storage.local.get(
-    ['capStatus', 'capError', 'capPct', 'lastCaptureAt', 'ismartRows', 'ismartTotal', 'ismartRaw', 'ismartEnvelopeKeys'], paint);
+    ['capStatus', 'capError', 'capPct', 'lastCaptureAt', 'ismartRows', 'ismartTotal', 'ismartRaw', 'ismartEnvelopeKeys', 'pagingMethod'], paint);
 });
 
 function busyUi(on) {

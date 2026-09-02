@@ -270,12 +270,26 @@ async function wheelBy(target, x, y, deltaY) {
     { type: 'mouseWheel', x, y, deltaX: 0, deltaY, pointerType: 'mouse' });
 }
 
+// 點擊。press 與 release 之間不留間隔，這件事比看起來重要。
+//
+// 這裡點的是「下一頁」按鈕，按下去會立刻觸發換頁。原本 press 與 release
+// 之間隔了 70ms，剛好夾在換頁過程中，造成兩個問題：
+//   1. release 落在已經更新的文件上 → 這次點擊不算完整的 click → 頁面沒翻
+//   2. 舊文件停在「左鍵還按著」的狀態 → 下一輪的 mouseMoved 變成拖曳
+//      → 從上次座標一路選到這次座標，畫面整片反白
+// 舊做法點的是頁碼輸入框，點下去不會換頁，所以看不出這個問題。
 async function clickAt(target, x, y) {
+  // 補一次 release：清掉上一次可能卡住的按鍵狀態。
+  // 沒有按下時多送一次放開是無害的。
+  await sendCmd(target, 'Input.dispatchMouseEvent',
+    { type: 'mouseReleased', x, y, button: 'left', buttons: 0, clickCount: 1, pointerType: 'mouse' })
+    .catch(() => {});
+
   await sendCmd(target, 'Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, pointerType: 'mouse' });
-  await sleep(90);
+  await sleep(60);
   await sendCmd(target, 'Input.dispatchMouseEvent',
     { type: 'mousePressed', x, y, button: 'left', buttons: 1, clickCount: 1, pointerType: 'mouse' });
-  await sleep(70);
+  // 不要 sleep：一旦換頁在這中間發生，這次點擊就廢了
   await sendCmd(target, 'Input.dispatchMouseEvent',
     { type: 'mouseReleased', x, y, button: 'left', buttons: 0, clickCount: 1, pointerType: 'mouse' });
 }
@@ -344,6 +358,92 @@ async function findNext(bmp, dpr) {
   return { xCss: best.cx / dpr, yCss: best.cyImg / dpr };
 }
 
+// 用 CDP 的 DOM 網域直接問「下一頁」按鈕的位置。
+//
+// 這是唯讀檢視，等同 DevTools 的 Elements 面板——不會在頁面裡執行任何 JS，
+// 所以仍然符合本專案「不注入腳本」的前提（Runtime.evaluate 才是執行程式碼，
+// 這裡用的是 DOM.querySelector / DOM.getBoxModel）。
+//
+// 比像素搜尋可靠得多：不受視窗寬度、縮放比例、版面微調影響。
+// 像素法那個寫死的 348px 偏移是從 OCR 版搬來的，只在特定視窗尺寸下成立。
+const NEXT_SELECTORS = [
+  'button.btn-next',
+  '.el-pagination button.btn-next',
+  '.el-pagination .btn-next',
+  '.pagination .next',
+  'li.next > a',
+  'a.next',
+  '[aria-label="下一頁"]',
+  '[title="下一頁"]',
+  '[aria-label="Next"]',
+  '[aria-label="next page"]'
+];
+
+function isDisabledAttrs(attributes) {
+  for (let i = 0; i < (attributes || []).length; i += 2) {
+    const k = attributes[i];
+    const v = String(attributes[i + 1] || '');
+    if (k === 'disabled') return true;
+    if (k === 'aria-disabled' && v === 'true') return true;
+    if (k === 'class' && /(^|\s)(is-disabled|disabled)(\s|$)/.test(v)) return true;
+  }
+  return false;
+}
+
+async function findNextByDom(target) {
+  try {
+    await sendCmd(target, 'DOM.enable');
+    const doc = await sendCmd(target, 'DOM.getDocument', { depth: 1 });
+    const rootId = doc && doc.root && doc.root.nodeId;
+    if (!rootId) return null;
+
+    const m = await getMetrics(target);
+
+    for (const selector of NEXT_SELECTORS) {
+      let nodeId = 0;
+      try {
+        const r = await sendCmd(target, 'DOM.querySelector', { nodeId: rootId, selector });
+        nodeId = (r && r.nodeId) || 0;
+      } catch (e) { continue; }
+      if (!nodeId) continue;
+
+      let disabled = false;
+      try {
+        const r = await sendCmd(target, 'DOM.getAttributes', { nodeId });
+        disabled = isDisabledAttrs(r && r.attributes);
+      } catch (e) {}
+
+      let model = null;
+      try {
+        const r = await sendCmd(target, 'DOM.getBoxModel', { nodeId });
+        model = r && r.model;
+      } catch (e) { continue; } // display:none 之類會丟錯，換下一個選擇器
+      const q = model && model.content;
+      if (!q || q.length < 8 || !(model.width > 0) || !(model.height > 0)) continue;
+
+      const xs = [q[0], q[2], q[4], q[6]];
+      const ys = [q[1], q[3], q[5], q[7]];
+      const cx = Math.round((Math.min(...xs) + Math.max(...xs)) / 2);
+      const cyRaw = Math.round((Math.min(...ys) + Math.max(...ys)) / 2);
+
+      // getBoxModel 的座標基準在不同 Chrome 版本有差異（文件座標 vs 視埠座標），
+      // 而 Input.dispatchMouseEvent 要的是視埠座標。
+      // 用「換算後必須落在視埠內」來判斷要不要扣掉捲動位移，不用猜。
+      let cy = cyRaw;
+      if (cy < 0 || cy > m.vh) {
+        const shifted = cyRaw - (m.pageY || 0);
+        if (shifted >= 0 && shifted <= m.vh) cy = shifted;
+      }
+      if (cx < 0 || cx > m.vw || cy < 0 || cy > m.vh) continue; // 不在畫面上
+
+      return { x: cx, y: cy, disabled, selector };
+    }
+    return null;
+  } catch (e) {
+    return null;
+  }
+}
+
 async function scrollToBottom(target) {
   for (let k = 0; k < 8; k++) {
     if (abortFlag) break;
@@ -366,15 +466,33 @@ async function scrollToBottom(target) {
 //   1. 少一層位置猜測（不再需要那個 167px 的偏移）
 //   2. 完全不需要 Ctrl+A，全選整頁的狀況不可能再發生
 //   3. 失敗模式變安全：點偏了只是「沒反應」，不會亂改頁面狀態
+// 翻頁用了哪一種定位方式，寫進 storage 供診斷用
+let lastPagingMethod = '';
+
 async function clickNextPage(target) {
   await scrollToBottom(target);
+
+  // 先問 DOM（精確、與視窗尺寸無關）
+  const dom = await findNextByDom(target);
+  if (dom) {
+    lastPagingMethod = 'DOM ' + dom.selector + (dom.disabled ? '（已停用＝最後一頁）' : '');
+    await chrome.storage.local.set({ pagingMethod: lastPagingMethod });
+    if (dom.disabled) return false;
+    await clickAt(target, dom.x, dom.y);
+    return true;
+  }
+
+  // DOM 找不到才退回像素搜尋（原本的做法，靠寫死的偏移量猜位置）
   const vp = await sendCmd(target, 'Page.captureScreenshot',
     { format: 'png', captureBeyondViewport: false, fromSurface: true });
   const bmp = await decodeShot(vp.data);
   const m = await getMetrics(target);
-  const dpr = bmp.width / m.cw;
+  // 截圖是視埠，所以基準要用 clientWidth，不是整份文件的寬度
+  const dpr = bmp.width / (m.vw || m.cw);
 
   const found = await findNext(bmp, dpr); // findNext 會關掉 bmp
+  lastPagingMethod = '像素搜尋' + (!found || found.disabled ? '（找不到「›」）' : '');
+  await chrome.storage.local.set({ pagingMethod: lastPagingMethod });
   if (!found || found.disabled) return false;
 
   await clickAt(target, Math.round(found.xCss), Math.round(found.yCss));

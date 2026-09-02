@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "591 廣告 vs i智慧 自動比對工具",
-  "version": "1.7.1",
+  "version": "1.7.2",
   "description": "一鍵比對 591 上架廣告與 i智慧關注物件（社區/價格/坪數/樓層），列出需下架或修改價格的廣告。i智慧 端不注入腳本、不主動呼叫 API。內含使用須知。",
   "permissions": [
     "debugger",
