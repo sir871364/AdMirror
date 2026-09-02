@@ -107,6 +107,22 @@ function applyAccess(a) {
     return;
   }
 
+  // 伺服器要求綁定瀏覽器帳號、但目前沒登入。
+  // qrAllowed 由背景依政策決定：只有試用要帳號 → 仍可掃 QR 申請正式授權；
+  // 正式授權也要帳號 → 連 QR 都不顯示，先登入再說。
+  if (a.mode === 'account_required') {
+    if (a.qrAllowed) {
+      createOrRefreshQr(a.message);
+      return;
+    }
+    stopQrTimers();
+    $('qrTimer').style.display = 'none';
+    document.querySelector('.qr-box').style.display = 'none';
+    $('refreshQrBtn').style.display = 'none';
+    setLicenseStatus(a.message, false);
+    return;
+  }
+
   // expired / 未授權 → 直接把 QR 準備好，省一次點擊
   createOrRefreshQr(a.message);
 }
@@ -260,6 +276,11 @@ $('appTitle').addEventListener('click', async (event) => {
   }
 
   if (a.mode === 'emergency_suspended' || a.mode === 'unavailable') {
+    return applyAccess(a);
+  }
+
+  // 政策要求正式授權綁帳號而目前沒登入 → 隱藏功能也不該繞過，交給 applyAccess 顯示登入提示
+  if (a.mode === 'account_required' && !a.qrAllowed) {
     return applyAccess(a);
   }
 

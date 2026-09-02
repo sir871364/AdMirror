@@ -19,7 +19,7 @@ import {
   TRIAL_DAYS,
   TRIAL_STATUS_API
 } from './src/config.js';
-import { classifyCoreLicenseStatus } from './src/core-access.js';
+import { classifyCoreLicenseStatus, readAccountPolicy, ACCOUNT_REQUIRED_MESSAGE } from './src/core-access.js';
 import { getDisclaimerAccepted } from './src/disclaimer.js';
 
 // ============ 取得方式設定 ============
@@ -125,6 +125,8 @@ async function getTrialInfo(googleAccount, installId, signal) {
 // mode: license | trial | emergency_suspended | expired | unavailable
 async function checkLiveCoreAccess() {
   const installId = await getOrCreateInstallId();
+  // 帳號先拿（本機、零成本），後面套用伺服器下達的綁定政策時才有得判斷
+  const googleAccount = await getChromeGoogleAccount();
   const url = LICENSE_STATUS_API +
     '?product_id=' + encodeURIComponent(PRODUCT_ID) +
     '&install_id=' + encodeURIComponent(installId);
@@ -139,11 +141,32 @@ async function checkLiveCoreAccess() {
     if (status.decision === 'suspended') {
       return { allowed: false, mode: 'emergency_suspended', message: status.message };
     }
+
+    // 帳號綁定政策：伺服器沒送這個欄位就是全部 optional（＝現況）。
+    // 存一份給 requestLicenseQr 用，它不會再打一次 license-status。
+    const policy = readAccountPolicy(data);
+    await chrome.storage.local.set({ account_policy: policy });
+
+    // license: required → 沒登入瀏覽器帳號就什麼都不能做，連 QR 都不給申請
+    if (policy.license === 'required' && !googleAccount) {
+      return { allowed: false, mode: 'account_required', qrAllowed: false, message: ACCOUNT_REQUIRED_MESSAGE };
+    }
+
     if (status.decision === 'licensed') {
       await chrome.storage.local.set({ license_expires_on: data.expires_on || null });
       return { allowed: true, mode: 'license', message: '授權有效。' };
     }
-    const googleAccount = await getChromeGoogleAccount();
+
+    // trial: required → 沒帳號不能自助試用，但正式授權仍可申請（QR 照給）
+    if (policy.trial === 'required' && !googleAccount) {
+      return {
+        allowed: false,
+        mode: 'account_required',
+        qrAllowed: true,
+        message: ACCOUNT_REQUIRED_MESSAGE + '\n\n或直接產生 QR Code 申請正式授權。'
+      };
+    }
+
     const trial = await getTrialInfo(googleAccount, installId, controller.signal);
     if (trial.active) {
       const days = Math.max(0, Math.ceil(trial.remainingMs / 86400000));
@@ -209,6 +232,15 @@ async function assertDisclaimer() {
 async function requestLicenseQr() {
   const installId = await getOrCreateInstallId();
   const googleAccount = await getChromeGoogleAccount();
+
+  // 政策要求正式授權必須綁帳號時，沒帳號就不送申請。
+  // 政策來自最近一次 license-status（checkLiveCoreAccess 存的）；沒存過＝optional。
+  const stored = await chrome.storage.local.get(['account_policy']);
+  const policy = readAccountPolicy({ account_policy: stored.account_policy });
+  if (policy.license === 'required' && !googleAccount) {
+    throw new Error(ACCOUNT_REQUIRED_MESSAGE);
+  }
+
   const body = { install_id: installId, product_id: PRODUCT_ID };
   if (googleAccount) {
     body.google_sub = googleAccount.google_sub;

@@ -66,4 +66,38 @@ assert.match(popup, /send\('accessStatus'\)/);
 assert.match(background, /const SOURCE_MODE = \{\s*\n\s*ismart: 'intercept'/,
   'SOURCE_MODE.ismart 必須是 intercept');
 
+// ---- 帳號綁定政策（伺服器下達、擴充先行部署）----
+// 最重要的一條：伺服器沒送 account_policy 時必須全部 optional，
+// 否則今天一部署就會有人被誤擋。
+// vm 跑在另一個 realm，回傳物件的原型不是本 realm 的 Object.prototype，
+// assert/strict 的 deepEqual 會判「結構相同但不相等」。攤平成本 realm 的物件再比。
+const readPolicy = (d) => ({ ...context.readAccountPolicy(d) });
+assert.deepEqual(readPolicy({}), { trial: 'optional', license: 'optional' });
+assert.deepEqual(readPolicy(null), { trial: 'optional', license: 'optional' });
+assert.deepEqual(readPolicy({ account_policy: 'garbage' }), { trial: 'optional', license: 'optional' });
+assert.deepEqual(readPolicy({ account_policy: { trial: 'REQUIRED' } }), { trial: 'optional', license: 'optional' },
+  '只有精確的 "required" 才算，其他一律 optional');
+assert.deepEqual(readPolicy({ account_policy: { trial: 'required' } }), { trial: 'required', license: 'optional' });
+assert.deepEqual(readPolicy({ account_policy: { license: 'required' } }), { trial: 'optional', license: 'required' });
+assert.deepEqual(readPolicy({ account_policy: { trial: 'required', license: 'required' } }),
+  { trial: 'required', license: 'required' });
+
+// 背景：帳號要在打 license-status 之前就拿好，政策才有得套
+{
+  const fn = background.slice(background.indexOf('async function checkLiveCoreAccess'),
+    background.indexOf('async function assertCoreAccess'));
+  assert.ok(fn.indexOf('await getChromeGoogleAccount()') < fn.indexOf("fetch(url, { cache: 'no-store'"),
+    '帳號必須在 license-status 之前取得');
+  assert.match(fn, /readAccountPolicy\(data\)/);
+  assert.match(fn, /mode: 'account_required', qrAllowed: false/);
+  assert.match(fn, /mode: 'account_required',\s*\n\s*qrAllowed: true/);
+  // 緊急停止必須排在政策之前：停用中不該看到「請登入」而是「已停用」
+  assert.ok(fn.indexOf("mode: 'emergency_suspended'") < fn.indexOf('readAccountPolicy(data)'));
+}
+// QR 申請也要看政策
+assert.match(background, /async function requestLicenseQr[\s\S]{0,600}?policy\.license === 'required' && !googleAccount/);
+// popup 要能顯示這個狀態
+assert.match(popup, /a\.mode === 'account_required'/);
+assert.match(popup, /if \(a\.qrAllowed\)/);
+
 console.log('AdMirror kill-switch checks passed.');
