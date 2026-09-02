@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<title>591 vs i智慧 比對報表</title>
+<style>
+  * { box-sizing: border-box; font-family: "Microsoft JhengHei", "PingFang TC", sans-serif; }
+  body { margin: 0; padding: 20px; background: #f5f5f7; color: #222; }
+  h1 { color: #ff7a00; margin: 0 0 4px; font-size: 22px; }
+  .sub { color: #666; font-size: 13px; margin-bottom: 16px; }
+  .cards { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 18px; }
+  .card { flex: 1; min-width: 160px; border-radius: 12px; padding: 18px; text-align: center; }
+  .card .n { font-size: 34px; font-weight: bold; line-height: 1; }
+  .card .l { font-size: 13px; margin-top: 6px; }
+  .c-ok { background: #e8f5e9; } .c-ok .n { color: #2e7d32; }
+  .c-price { background: #fff8e1; } .c-price .n { color: #ef6c00; }
+  .c-check { background: #fff3e0; } .c-check .n { color: #e65100; }
+  .c-extra { background: #ffebee; } .c-extra .n { color: #c62828; }
+  .c-noad { background: #e3f2fd; } .c-noad .n { color: #1565c0; }
+  .sec { font-size: 15px; font-weight: bold; margin: 18px 0 8px; }
+  table { border-collapse: collapse; width: 100%; background: #fff; font-size: 13px; }
+  th, td { border: 1px solid #e3e3e3; padding: 8px 10px; text-align: left; vertical-align: top; }
+  th { background: #ff7a00; color: #fff; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 12px; font-weight: bold; }
+  .b-ok { background: #e8f5e9; color: #2e7d32; }
+  .b-price { background: #fff3e0; color: #ef6c00; }
+  .b-check { background: #fff3e0; color: #e65100; }
+  .b-extra { background: #ffebee; color: #c62828; }
+  .b-noad { background: #e3f2fd; color: #1565c0; }
+  .sub2 { color: #777; font-size: 12px; }
+  a { color: #1552c0; }
+  .empty { color: #c62828; }
+  .act { font-weight: bold; }
+  .act-price { color: #ef6c00; } .act-extra { color: #c62828; } .act-check { color: #e65100; }
+</style>
+</head>
+<body>
+  <h1>591 廣告 vs i智慧 關注 — 比對報表</h1>
+  <div class="sub" id="sub"></div>
+  <div class="cards" id="cards"></div>
+  <div id="body"></div>
+  <script src="report.js"></script>
+</body>
+</html>

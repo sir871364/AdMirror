@@ -1,153 +1,119 @@
 # 591 廣告 vs i智慧 自動比對工具
 
 <p align="center">
-  <img src="icon.png" width="100" alt="Extension Icon" />
+  <img src="icon128.png" width="100" alt="Extension Icon" />
 </p>
 
 <p align="center">
-  輕量化 Chrome 擴充功能 - 一鍵比對 <a href="https://is.ycut.com.tw/">i智慧</a> 關注物件與 <a href="https://user.591.com.tw/">591 會員中心</a> 上架廣告
+  Chrome 擴充功能 — 一鍵比對 <a href="https://is.ycut.com.tw/">i智慧</a> 關注物件與 <a href="https://user.591.com.tw/">591 會員中心</a> 上架廣告
 </p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/Manifest-V3-blue" alt="Manifest V3" />
-  <img src="https://img.shields.io/badge/Version-1.2.2-green" alt="Version 1.2.2" />
+  <img src="https://img.shields.io/badge/Version-1.7.0-green" alt="Version 1.7.0" />
   <img src="https://img.shields.io/badge/Chrome-Extension-red?logo=googlechrome&logoColor=white" alt="Chrome Extension" />
   <img src="https://img.shields.io/badge/Trial-3%20Days-orange" alt="3 Days Trial" />
 </p>
 
-## Features
+## 這一版做了什麼改變
 
-- 自動抓取 i智慧「關注物件」清單
-- 自動抓取 591 會員中心「開啟中物件」清單
-- 比對社區名稱、總價、坪數、樓層等資料
-- 列出價格不一致、591 多出的廣告、關注沒對應的物件
-- 支援 591 API 抓取，異常時自動切換 DOM 備用模式
-- 支援 i智慧 API 抓取，異常時自動切換 DOM 備用模式
-- 內建使用須知確認、3 天試用與授權碼驗證
-- 結果頁會顯示建議動作，方便快速修正或下架廣告
+v1.7.0 把 i智慧 端的取得方式整個換掉了。
 
-## Tech Stack
+| | 舊做法（v1.6 以前） | 現在（v1.7.0） |
+|---|---|---|
+| i智慧 取資料 | 注入腳本，直接呼叫內部 API（`take:100`，幾秒內約 20 次） | **CDP Network 攔截**：讀頁面自己收到的回應 |
+| 對 i智慧 發出請求 | 擴充自己發 | **不發**，全部由頁面在模擬翻頁下自行發出 |
+| `is.ycut.com.tw` host permission | 需要 | **不需要**（manifest 裡沒有） |
+| 591 取資料 | 注入腳本呼叫 API | 不變 |
 
-| 項目 | 技術 |
-|------|------|
-| 平台 | Chrome Extension (Manifest V3) |
-| UI | HTML / CSS / JavaScript |
-| 資料抓取 | Chrome Tabs API + Scripting API |
-| 儲存 | Chrome Storage Local API |
-| 授權驗證 | Cloudflare Workers API |
-| 比對方式 | 社區名稱正規化 + 價格 / 坪數 / 樓層比對 |
+換掉的原因是：舊做法在伺服器紀錄上一眼就看得出不是真人操作——`take:100` 是前端介面根本給不出的參數。新做法送出的請求與真人翻頁完全相同，因為那些請求本來就是頁面自己發的。
 
-## Architecture
+資料品質不受影響：攔截拿到的是與 API 相同的原始 JSON，不是畫面辨識，所以價格、坪數、樓層都是精確值。
+
+> 詳細的機制說明見 `安裝說明.txt`。
+
+## 功能
+
+- 自動擷取 i智慧「關注物件」清單（Network 攔截，含自動翻頁）
+- 自動翻頁失效時可改用手動模式，自己翻頁、工具在旁收資料
+- 自動擷取 591 會員中心「開啟中物件」清單
+- 比對社區名稱、總價、坪數、樓層、格局
+- 全域最佳指派 + 唯一價格救援，避免一對多誤配
+- 分成「完美匹配 / 價格不一致 / 需人工確認 / 591 多出 / 關注沒對應」五類
+- 完整性防呆：攔到的筆數少於 i智慧 回報的總筆數就不出報表
+- 內建使用須知確認、3 天試用、QR Code 授權與遠端緊急停止
+
+## 技術架構
 
 ```
-AdMirror/
-├── manifest.json           # 擴充功能設定 (Manifest V3)
-├── popup.html              # 擴充功能入口 UI
-├── popup.js                # 試用 / 授權驗證與開啟結果頁
-├── disclaimer.html         # 獨立的首次使用須知與 readonly 重看頁
-├── disclaimer.css          # 使用須知頁面樣式
-├── disclaimer.js           # 捲動、同意、關閉與 readonly 操作
-├── src/disclaimer.js       # 版本化同意紀錄的共用 storage 模組
-├── result.html             # 比對進度與結果頁
-├── result.js               # i智慧 / 591 資料抓取、比對與結果渲染
-├── icon.png                # 擴充功能圖示
-├── ★安裝說明★.html          # 圖文安裝與使用說明
-├── result_test.txt         # 測試用文字檔
-└── 自動對比廣告工具.zip      # 封裝後的工具壓縮檔
+背景 service worker (background.js)
+├─ 授權 / 試用 / 緊急停止      每次動作前即時查詢，不吃快取
+├─ 使用須知閘門                未同意直接開啟須知頁
+├─ i智慧 擷取                  chrome.debugger + Network.enable
+│                              clickNextPage() 模擬點「下一頁 ›」
+├─ 591 擷取                    注入腳本呼叫 bff-user API
+└─ 比對邏輯                    scorePair / compareData
+
+popup.html + popup.js          操作介面、QR Code 授權面板
+report.html + report.js        比對報表
+disclaimer.*                   首次使用須知（強制閱讀）
+src/                           config / core-access / disclaimer / local-qr
+lib/qrcode-generator.mjs       本機 QR Code 產生
 ```
 
-### 運作流程
+### 兩邊各有兩條實作
 
-```mermaid
-flowchart LR
-    A[popup.js<br/>開始自動比對] --> B{授權或試用有效?}
-    B -->|是| C{已同意首次使用須知?}
-    C -->|否| D[disclaimer.html<br/>閱讀並儲存同意紀錄後關閉]
-    B -->|否| Q[顯示 QR Code 授權流程]
-    C -->|是| R[result.html<br/>開啟結果頁]
-    R --> E[抓取 i智慧關注物件]
-    R --> F[抓取 591 開啟中廣告]
-    E --> G[正規化社區 / 價格 / 坪數 / 樓層]
-    F --> G
-    G --> H[產生比對結果與建議動作]
+`background.js` 最上方的 `SOURCE_MODE` 決定實際跑哪一條：
 
-    style A fill:#ff7a00,color:#fff
-    style C fill:#007aff,color:#fff
-    style H fill:#34c759,color:#fff
+```js
+const SOURCE_MODE = {
+  ismart: 'intercept',   // 'intercept' | 'api'
+  s591:   'api'          // 'api' | 'intercept'
+};
 ```
 
-## Installation
+四條路都在原始碼裡，未啟用的保留備用。刻意不做成 UI 選項——這兩條路的產出會影響「要不要下架廣告」，讓使用者隨手切換只會增加誤判機會。
 
-### 方法一：下載 ZIP 安裝
+其中 i智慧 的 API 路徑**改了設定也跑不起來**，因為 manifest 沒有對應的 host permission。要啟用必須同時改設定與 manifest，這是刻意的雙鎖。
 
-1. 下載此專案或 `自動對比廣告工具.zip`
-2. 將 ZIP 解壓縮到固定資料夾
-3. 開啟 Chrome，前往 `chrome://extensions/`
-4. 右上角開啟 **開發人員模式**
-5. 點擊 **載入未封裝項目**
-6. 選擇解壓縮後的整個資料夾
-7. 將「591 廣告 vs i智慧 自動比對工具」釘選到工具列
+## 安裝
 
-### 方法二：Clone 專案
+1. `chrome://extensions` → 開啟「開發人員模式」
+2. 「載入未封裝項目」→ 選這個資料夾
+
+不需要 native host、不需要下載辨識模型。
+
+## 使用
+
+1. Chrome 先登入 i智慧，也登入 591
+2. 切到 i智慧「關注物件」清單頁
+3. 按擴充 → 「🚀 自動擷取並比對」
+
+首次使用會先要求閱讀使用須知；未授權時會自動顯示 QR Code，請管理員核准後幾秒內自動解鎖。
+
+## 開發
 
 ```bash
-git clone https://github.com/sir871364/AdMirror.git
+npm test
 ```
 
-接著依照上方步驟，到 `chrome://extensions/` 載入此資料夾。
+測試涵蓋：
 
-## Usage
+| 檔案 | 守住什麼 |
+|---|---|
+| `tests/build-check.cjs` | ES module 語法、manifest 引用、import 路徑、版號一致性 |
+| `tests/disclaimer.test.cjs` | 同意紀錄的儲存契約、章節完整性與編號、閘門位置 |
+| `tests/kill-switch.test.cjs` | 授權分類器、不吃快取、fail-closed、四個入口的閘門順序 |
+| `tests/privacy-license.test.cjs` | **manifest 不得含 is.ycut.com.tw**、QR 本機產生、政策與實作同步 |
 
-1. 先確認 Chrome 已登入 [i智慧](https://is.ycut.com.tw/) 與 [591 會員中心](https://user.591.com.tw/)
-2. 點擊工具列上的擴充功能圖示
-3. 若尚未授權，可使用 3 天試用或輸入授權碼
-4. 按下 **開始自動比對**
-5. 等待新分頁抓取資料並產生比對結果
-6. 依照結果頁的建議動作修改價格、下架廣告或確認漏上架物件
+最後一項的第一條是本專案最重要的不變條件：整個「零注入」設計就建立在沒有那個權限上。
 
-## Result Types
+## 授權與產品代號
 
-| 狀態 | 意思 | 建議動作 |
-|------|------|----------|
-| 完美匹配 | i智慧與 591 的社區、價格等資料一致 | 不需處理 |
-| 價格不一致 | 同社區但 i智慧與 591 價格不同 | 修改 591 廣告價格 |
-| 591 多出 | 591 有上架，但 i智慧沒有對應關注物件 | 確認是否已成交，必要時下架 |
-| 關注沒對應 | i智慧有關注，但 591 沒有對應廣告 | 確認是否漏上架 |
+產品代號 `listing_compare`，與後台的授權、試用、到期日、緊急停止對應。
 
-## Permissions
+管理員可隨時在後台停用該產品，使用者下一次按任何按鈕就會被擋下（不吃快取，即時生效）。
 
-| 權限 | 用途 |
-|------|------|
-| `tabs` | 開啟背景分頁抓取 i智慧與 591 資料 |
-| `scripting` | 在指定網站分頁內執行資料擷取程式 |
-| `storage` | 儲存安裝 ID、試用狀態、授權碼與使用須知確認狀態 |
-| `host_permissions` | 存取 i智慧、591 會員中心與授權驗證 API |
+## 免責
 
-## Configuration
-
-| 設定項目 | 預設值 | 說明 |
-|----------|--------|------|
-| 試用天數 | `3` 天 | 第一次使用時自動開始試用 |
-| 授權產品 | `listing_compare` | 授權 API 用於辨識此工具 |
-| 使用須知版本 | `1` | 使用須知更新時可重新要求使用者確認 |
-
-## Changelog
-
-### v1.2.2
-
-- 新增授權驗證與 3 天試用機制
-- 新增使用須知確認流程
-- 強化 i智慧 / 591 API 抓取與 DOM 備用模式
-- 結果頁新增健康檢查與模式標示
-- 改善價格不一致、591 多出、關注沒對應的結果呈現
-
-## Notes
-
-- 使用前需先在 Chrome 登入 i智慧與 591 會員中心
-- 工具會使用目前瀏覽器登入狀態抓取資料，不會要求輸入網站密碼
-- 若結果顯示 0 筆，請確認兩個網站都已登入，再重新比對
-- 若網站版面或 API 改版，可能需要更新工具
-
-## License
-
-未指定授權條款。
+本工具僅供有合法存取權限的使用者用於自己的帳號資料。使用前請閱讀完整的使用須知與免責聲明（擴充功能內建，或見 `disclaimer.html`）。

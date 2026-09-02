@@ -1,29 +1,42 @@
 {
   "manifest_version": 3,
   "name": "591 廣告 vs i智慧 自動比對工具",
-  "version": "1.6.0",
-  "description": "一鍵自動抓取 591 上架廣告與 i智慧關注物件，比對社區/價格/坪數/樓層，列出需下架或修改價格的廣告。內含使用須知。",
-  "permissions": ["tabs", "scripting", "storage", "identity", "identity.email"],
+  "version": "1.7.0",
+  "description": "一鍵比對 591 上架廣告與 i智慧關注物件（社區/價格/坪數/樓層），列出需下架或修改價格的廣告。i智慧 端不注入腳本、不主動呼叫 API。內含使用須知。",
+  "permissions": [
+    "debugger",
+    "tabs",
+    "storage",
+    "scripting",
+    "identity",
+    "identity.email"
+  ],
   "host_permissions": [
-    "https://is.ycut.com.tw/*",
     "https://user.591.com.tw/*",
+    "https://bff-user.591.com.tw/*",
     "https://ycut-license-api.sir8713642.workers.dev/*"
   ],
   "content_security_policy": {
     "extension_pages": "script-src 'self'; object-src 'self'; img-src 'self' data:; connect-src 'self' https://ycut-license-api.sir8713642.workers.dev;"
   },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
   "action": {
     "default_popup": "popup.html",
     "default_title": "591 vs i智慧 比對",
     "default_icon": {
-      "16": "icon.png",
-      "48": "icon.png",
-      "128": "icon.png"
+      "16": "icon16.png",
+      "32": "icon32.png",
+      "48": "icon48.png",
+      "128": "icon128.png"
     }
   },
   "icons": {
-    "16": "icon.png",
-    "48": "icon.png",
-    "128": "icon.png"
+    "16": "icon16.png",
+    "32": "icon32.png",
+    "48": "icon48.png",
+    "128": "icon128.png"
   }
 }
